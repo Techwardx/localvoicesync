@@ -46,7 +46,9 @@ class SyncStatus {
       case LinkState.offline:
         return pendingFiles > 0 ? '离线 · 待处理 $pendingFiles' : '离线';
       case LinkState.unconfigured:
-        return '离线';
+        // 灰色 = 还没配置，跟"配置了但连不上"（黄灯）是两回事，
+        // 文案上必须区分开，否则用户永远不知道该去填设置。
+        return '未配置';
     }
   }
 

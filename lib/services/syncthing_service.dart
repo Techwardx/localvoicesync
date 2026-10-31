@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 
 import '../core/app_config.dart';
 import '../core/app_log.dart';
@@ -85,9 +87,12 @@ class SyncthingDiagnosis {
 /// ping 只能告诉你"机器活着"。黄灯上那个数字必须是真实的待同步量，
 /// 否则用户会以为记录丢了。
 ///
-/// 为什么要有 [diagnose]：
-/// 之前"离线"只有一句话，用户无法判断到底是 API Key 错了、文件夹 ID 错了、
-/// 还是 Syncthing 根本没在跑。这三个原因的修法完全不同，必须分开说。
+/// 为什么要放行自签证书：
+/// Syncthing（尤其 Android 上的 Syncthing-Fork）的 Web GUI 默认可能跑在
+/// **HTTPS** 上，证书是它自己签的。用系统信任链去校验必然
+/// `CERTIFICATE_VERIFY_FAILED`——但这台"服务器"就在本机回环上，
+/// 是我们自己的进程，校验它没有任何安全收益，只会让状态灯永远离线。
+/// 因此只对回环/私有网段放行，公网地址仍然严格校验。
 class SyncthingService {
   const SyncthingService();
 
@@ -101,6 +106,40 @@ class SyncthingService {
       localPending: localPending,
     );
     return diagnosis.status;
+  }
+
+  /// 是否属于"可以放行自签证书"的地址：本机回环 + 私有网段。
+  static bool _isTrustedHost(String host) {
+    final h = host.toLowerCase();
+    if (h == 'localhost' || h == '127.0.0.1' || h == '::1') return true;
+    if (h.startsWith('192.168.') || h.startsWith('10.')) return true;
+    final m = RegExp(r'^172\.(\d+)\.').firstMatch(h);
+    if (m != null) {
+      final second = int.tryParse(m.group(1)!) ?? 0;
+      if (second >= 16 && second <= 31) return true;
+    }
+    return false;
+  }
+
+  static http.Client _buildClient() {
+    final inner = HttpClient()
+      ..connectionTimeout = AppConfig.syncthingHttpTimeout
+      // 只对回环/局域网放行自签证书；外部地址照常严格校验。
+      ..badCertificateCallback = (cert, host, port) => _isTrustedHost(host);
+    return IOClient(inner);
+  }
+
+  /// 用户可能把 `http://` 填成 `https://`（或反过来）。
+  /// 两个都试一遍，谁通算谁——比让用户自己去猜协议友好得多。
+  static List<String> _candidateBases(String raw) {
+    final base = raw.trim().replaceAll(RegExp(r'/+$'), '');
+    final out = <String>[base];
+    if (base.startsWith('http://')) {
+      out.add('https://${base.substring(7)}');
+    } else if (base.startsWith('https://')) {
+      out.add('http://${base.substring(8)}');
+    }
+    return out;
   }
 
   /// 完整探测，返回每一步的成败，供设置页展示。
@@ -134,40 +173,50 @@ class SyncthingService {
     }
     steps.add(const ProbeStep('已填写 API Key 与文件夹 ID', true));
 
-    final client = http.Client();
+    final client = _buildClient();
     try {
-      final base = config.baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
       final headers = <String, String>{'X-API-Key': config.apiKey.trim()};
 
-      // ---- 第 1 步：这台设备上的 Syncthing 到底有没有在跑
-      try {
-        final ping = await client
-            .get(Uri.parse('$base/rest/noauth/health'))
-            .timeout(AppConfig.syncthingHttpTimeout);
-        steps.add(
-          ProbeStep(
-            '能连上 Syncthing（$base）',
-            ping.statusCode == 200,
-            'HTTP ${ping.statusCode}',
-          ),
-        );
-        if (ping.statusCode != 200) {
-          return SyncthingDiagnosis(
-            status: fail('Syncthing 无响应（HTTP ${ping.statusCode}）'),
-            steps: steps,
-          );
+      // ---- 第 1 步：找到能通的协议与地址
+      String? reachable;
+      final errors = <String>[];
+      for (final base in _candidateBases(config.baseUrl)) {
+        try {
+          final ping = await client
+              .get(Uri.parse('$base/rest/noauth/health'))
+              .timeout(AppConfig.syncthingHttpTimeout);
+          if (ping.statusCode == 200) {
+            reachable = base;
+            break;
+          }
+          errors.add('$base → HTTP ${ping.statusCode}');
+        } on Object catch (error) {
+          errors.add('$base → ${_short(error)}');
         }
-      } on Object catch (error) {
-        steps.add(ProbeStep('能连上 Syncthing（$base）', false, '$error'));
+      }
+
+      if (reachable == null) {
+        steps.add(
+          ProbeStep('能连上 Syncthing', false, errors.join('；')),
+        );
         return SyncthingDiagnosis(
-          status: fail('连不上 $base，Syncthing 可能没在运行'),
+          status: fail('连不上 ${config.baseUrl}，Syncthing 可能没在运行'),
           steps: steps,
         );
       }
+      steps.add(
+        ProbeStep(
+          '能连上 Syncthing',
+          true,
+          reachable == config.baseUrl.trim().replaceAll(RegExp(r'/+$'), '')
+              ? reachable
+              : '$reachable（协议和填写的不一致，建议改成这个）',
+        ),
+      );
 
       // ---- 第 2 步：API Key 对不对（用需要鉴权的接口试）
       final statusUri = Uri.parse(
-        '$base/rest/db/status?folder=${Uri.encodeQueryComponent(config.folderId.trim())}',
+        '$reachable/rest/db/status?folder=${Uri.encodeQueryComponent(config.folderId.trim())}',
       );
       final response = await client
           .get(statusUri, headers: headers)
@@ -216,13 +265,34 @@ class SyncthingService {
       final needFiles = (decoded['needFiles'] as num?)?.toInt() ?? 0;
       final folderState = (decoded['state'] ?? 'idle').toString();
 
+      // ---- 文件夹模式：Send Only 会导致"手机发得出去、Mac 的结果收不回来"，
+      //      而且状态灯还是绿的（因为本机没有待传文件），极难自查。
+      final folderType = await _folderType(
+        client: client,
+        base: reachable,
+        headers: headers,
+        folderId: config.folderId.trim(),
+      );
+      if (folderType != null) {
+        final bidirectional = folderType == 'sendreceive';
+        steps.add(
+          ProbeStep(
+            '文件夹是双向同步',
+            bidirectional,
+            bidirectional
+                ? ''
+                : '$folderType —— 收不到 Mac 的回传结果，请在 Syncthing 里改成「发送和接收」',
+          ),
+        );
+      }
+
       // ---- 第 3 步：Mac 那台设备在线吗
       var remoteConnected = true;
       final wanted = config.remoteDeviceId.trim();
       if (wanted.isNotEmpty) {
         final result = await _remoteState(
           client: client,
-          base: base,
+          base: reachable,
           headers: headers,
           deviceId: wanted,
         );
@@ -263,13 +333,45 @@ class SyncthingService {
         steps: steps,
       );
     } on Object catch (error) {
-      steps.add(ProbeStep('探测过程未抛异常', false, '$error'));
+      steps.add(ProbeStep('探测过程未抛异常', false, _short(error)));
       return SyncthingDiagnosis(
-        status: fail('探测异常：$error'),
+        status: fail('探测异常：${_short(error)}'),
         steps: steps,
       );
     } finally {
       client.close();
+    }
+  }
+
+  /// 把异常压缩成一行，别把整个堆栈塞进 UI。
+  static String _short(Object error) {
+    final text = error.toString().replaceAll('\n', ' ');
+    return text.length <= 120 ? text : '${text.substring(0, 120)}…';
+  }
+
+  /// 读文件夹模式（`sendreceive` / `sendonly` / `receiveonly` …）。
+  /// 拿不到就返回 null，不因此判定离线。
+  Future<String?> _folderType({
+    required http.Client client,
+    required String base,
+    required Map<String, String> headers,
+    required String folderId,
+  }) async {
+    try {
+      final response = await client
+          .get(Uri.parse('$base/rest/config/folders'), headers: headers)
+          .timeout(AppConfig.syncthingHttpTimeout);
+      if (response.statusCode != 200) return null;
+      final decoded = jsonDecode(response.body);
+      if (decoded is! List) return null;
+      for (final item in decoded) {
+        if (item is Map && item['id']?.toString() == folderId) {
+          return (item['type'] ?? 'sendreceive').toString();
+        }
+      }
+      return null;
+    } on Object {
+      return null;
     }
   }
 
@@ -307,7 +409,9 @@ class SyncthingService {
         }
       }
       if (matched == null) {
-        final known = connections.keys.map((k) => k.toString().substring(0, 7)).join(', ');
+        final known = connections.keys
+            .map((k) => k.toString().substring(0, 7))
+            .join(', ');
         return (
           connected: false,
           detail: '这台 Syncthing 里没有该设备（已知：${known.isEmpty ? '无' : known}）',
@@ -319,7 +423,7 @@ class SyncthingService {
         detail: connected ? '' : '设备已配对但当前未建立连接（Mac 端 Syncthing 没开？）',
       );
     } on Object catch (error) {
-      return (connected: true, detail: '$error');
+      return (connected: true, detail: _short(error));
     }
   }
 }

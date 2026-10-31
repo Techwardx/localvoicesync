@@ -230,9 +230,12 @@ class SyncStatusNotifier extends Notifier<SyncStatus> {
     );
     unawaited(refresh());
     final services = ref.read(servicesProvider);
+    final configured = ref.read(settingsProvider).syncthing.isConfigured;
+    // 已经填过配置的，别先给一个"未配置"的灰灯再跳变——那会让人以为配置没保存。
     return SyncStatus(
-      state: LinkState.unconfigured,
+      state: configured ? LinkState.offline : LinkState.unconfigured,
       pendingFiles: services.initialPending,
+      detail: configured ? '正在探测…' : '未配置 Syncthing',
     );
   }
 

@@ -79,43 +79,24 @@ class InboxWatcherService {
     var seen = 0;
     var inboxDirs = 0;
     try {
-      final members = await _paths.syncRoot
-          .list()
-          .where((entity) => entity is Directory)
-          .cast<Directory>()
-          .toList();
+      final entries = await _collectInboxFiles();
+      seen = entries.length;
+      inboxDirs = entries.map((e) => e.dirName).toSet().length;
 
-      for (final memberDir in members) {
-        final dirName = p.basename(memberDir.path);
-        final inbox = Directory(p.join(memberDir.path, AppConfig.inboxDirName));
-        if (!await inbox.exists()) continue;
-        inboxDirs += 1;
-
-        final files = await inbox
-            .list()
-            .where((entity) => entity is File)
-            .cast<File>()
-            .toList();
-        // 先处理错误回执，避免"成功文件不存在但错误文件存在"时状态卡在 local。
-        files.sort((a, b) => a.path.compareTo(b.path));
-
-        for (final file in files) {
-          final name = p.basename(file.path);
-          if (!name.endsWith('.json')) continue;
-          if (name.startsWith('.')) continue;
-          seen += 1;
-          // 单个文件出问题绝不能中断整轮扫描：之前的实现只捕获
-          // FileSystemException，一旦某条记录的解析或写库抛错，
-          // 整个 Timer 回调就静默中断，表现为"文件明明在，却永远不入库"。
-          try {
-            final ok = name.endsWith('.error.json')
-                ? await _ingestError(file)
-                : await _ingestSuccess(file, dirName);
-            if (ok) ingested += 1;
-          } on Object catch (error, stack) {
-            lastError = '$name: $error';
-            AppLog.e('inbox', '处理 $name 失败：$error\n$stack');
-          }
+      for (final entry in entries) {
+        final file = entry.file;
+        final name = p.basename(file.path);
+        // 单个文件出问题绝不能中断整轮扫描：之前的实现只捕获
+        // FileSystemException，一旦某条记录的解析或写库抛错，
+        // 整个 Timer 回调就静默中断，表现为"文件明明在，却永远不入库"。
+        try {
+          final ok = name.endsWith('.error.json')
+              ? await _ingestError(file)
+              : await _ingestSuccess(file, entry.dirName);
+          if (ok) ingested += 1;
+        } on Object catch (error, stack) {
+          lastError = '$name: $error';
+          AppLog.e('inbox', '处理 $name 失败：$error\n$stack');
         }
       }
     } on FileSystemException catch (error) {
@@ -139,6 +120,34 @@ class InboxWatcherService {
     return ingested;
   }
 
+  /// 从同步根**递归**找出所有 `<成员>/inbox/*.json`。
+  ///
+  /// 为什么不再逐个成员目录列：部分 Android 设备上，对"应用自己创建、
+  /// 由别的 App（Syncthing）填充"的目录做单层 readdir 会拿到陈旧的空列表。
+  /// 从根做一次递归遍历走的是同一条路径，但能顺带覆盖成员目录被重建、
+  /// 以及成员目录名带前缀等意外情况，容错性明显更好。
+  Future<List<({File file, String dirName})>> _collectInboxFiles() async {
+    final out = <({File file, String dirName})>[];
+    final root = _paths.syncRoot;
+    if (!await root.exists()) return out;
+
+    await for (final entity in root.list(recursive: true, followLinks: false)) {
+      if (entity is! File) continue;
+      final name = p.basename(entity.path);
+      if (name.startsWith('.') || !name.endsWith('.json')) continue;
+      if (p.basename(p.dirname(entity.path)) != AppConfig.inboxDirName) {
+        continue;
+      }
+      final memberDir = p.basename(p.dirname(p.dirname(entity.path)));
+      // `.stfolder` / `.stversions` 里不会有 inbox，但仍防一手。
+      if (memberDir.isEmpty || memberDir.startsWith('.')) continue;
+      out.add((file: entity, dirName: memberDir));
+    }
+    // 先处理错误回执，避免"成功文件不存在但错误文件存在"时状态卡在 local。
+    out.sort((a, b) => a.file.path.compareTo(b.file.path));
+    return out;
+  }
+
   /// 给设置页用的快照：同步根、各成员收件箱里到底有什么。
   Future<InboxDiagnostics> diagnose() async {
     final lines = <String>[];
@@ -152,17 +161,35 @@ class InboxWatcherService {
         lines.add('同步根目录不存在');
         return InboxDiagnostics(lines: lines, totalFiles: 0);
       }
+      // `.stfolder` 是 Syncthing 认领这个目录时放的标记。
+      // 它不在 → 这个路径根本不是 Syncthing 的文件夹（只是同名目录）。
+      final marker = Directory(
+        p.join(_paths.syncRoot.path, '.stfolder'),
+      );
+      lines.add('Syncthing 已认领此目录 ${await marker.exists() ? '是' : '否'}');
       final members = await _paths.syncRoot
           .list()
           .where((e) => e is Directory)
           .cast<Directory>()
+          .where((dir) => !p.basename(dir.path).startsWith('.'))
           .toList();
+      if (members.isEmpty) {
+        lines.add('同步根下没有任何成员目录');
+      }
       for (final memberDir in members) {
-        final inbox = Directory(
-          p.join(memberDir.path, AppConfig.inboxDirName),
+        final name = p.basename(memberDir.path);
+        final inbox = Directory(p.join(memberDir.path, AppConfig.inboxDirName));
+        final outbox = Directory(
+          p.join(memberDir.path, AppConfig.outboxDirName),
         );
+
+        // outbox 里有东西、inbox 是空的 —— 说明"发得出去、收不回来"，
+        // 问题在 Syncthing 的文件夹模式（Send Only / Receive Only），
+        // 不在 App 这边。这条信息比单纯数 inbox 文件有用得多。
+        final outCount = await _countFiles(outbox);
+        final outNames = await _sampleNames(outbox);
         if (!await inbox.exists()) {
-          lines.add('${p.basename(memberDir.path)}/inbox 不存在');
+          lines.add('$name/inbox 不存在（outbox 有 $outCount 个文件）');
           continue;
         }
         final files = await inbox
@@ -171,19 +198,64 @@ class InboxWatcherService {
             .cast<File>()
             .toList();
         totalFiles += files.length;
-        final names = files
-            .map((f) => p.basename(f.path))
-            .take(6)
-            .join('、');
+        final names = files.map((f) => p.basename(f.path)).take(6).join('、');
         lines.add(
-          '${p.basename(memberDir.path)}/inbox 共 ${files.length} 个文件'
+          '$name/inbox 共 ${files.length} 个文件'
           '${files.isEmpty ? '' : '：$names'}',
         );
+        lines.add(
+          '$name/outbox 共 $outCount 个文件'
+          '${outNames.isEmpty ? '' : '：$outNames'}',
+        );
+      }
+
+      // 完整树（深度 2）：让"App 到底看见了什么"一目了然，
+      // 不用再靠猜是权限、路径还是目录缓存的问题。
+      lines.add('— 目录树（深度 2）—');
+      for (final memberDir in members) {
+        final name = p.basename(memberDir.path);
+        final subs = await memberDir
+            .list()
+            .where((e) => e is Directory)
+            .cast<Directory>()
+            .toList();
+        if (subs.isEmpty) {
+          lines.add('$name/（空）');
+          continue;
+        }
+        for (final sub in subs) {
+          final count = await _countFiles(sub);
+          lines.add('$name/${p.basename(sub.path)}/ → $count 个文件');
+        }
       }
     } on Object catch (error) {
       lines.add('读取目录失败：$error');
     }
     return InboxDiagnostics(lines: lines, totalFiles: totalFiles);
+  }
+
+  static Future<int> _countFiles(Directory dir) async {
+    try {
+      if (!await dir.exists()) return 0;
+      return await dir.list().where((e) => e is File).length;
+    } on Object {
+      return 0;
+    }
+  }
+
+  static Future<String> _sampleNames(Directory dir) async {
+    try {
+      if (!await dir.exists()) return '';
+      final names = await dir
+          .list()
+          .where((e) => e is File)
+          .map((e) => p.basename(e.path))
+          .take(3)
+          .toList();
+      return names.join('、');
+    } on Object {
+      return '';
+    }
   }
 
   Future<bool> _ingestSuccess(File file, String dirName) async {

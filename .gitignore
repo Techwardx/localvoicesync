@@ -1,0 +1,67 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+/coverage/
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Android Studio will place build artifacts here
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+# ================= LocalVoiceSync 追加 =================
+
+# 向量模型不进 git：约 24MB，且随版本更新。
+# 用 tool/fetch_embedding_model.sh 下载（CI 里会自动拉，失败则降级为纯关键词检索）。
+assets/models/*.onnx
+assets/models/vocab.txt
+
+# Mac 端流水线
+mac_processor/.venv/
+mac_processor/.env
+mac_processor/__pycache__/
+mac_processor/*.db
+mac_processor/*.db-journal
+
+# 签名材料
+android/key.properties
+android/app/*.jks
+android/app/*.keystore
+*.apk
+*.aab
+*.ipa

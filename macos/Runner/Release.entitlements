@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<!-- 访问本机 / 局域网的 Syncthing REST 接口 -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<!-- 麦克风：没有这条，macOS 上录音会直接拿到静音数据 -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+	<!-- 读写用户选中的目录（把同步目录指到 Documents 以外时需要） -->
+	<key>com.apple.security.files.user-selected.read-write</key>
+	<true/>
+</dict>
+</plist>

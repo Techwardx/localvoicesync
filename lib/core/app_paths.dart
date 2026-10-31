@@ -1,0 +1,154 @@
+import 'dart:io';
+
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+
+import 'app_config.dart';
+
+/// 统一管理所有磁盘路径。
+///
+/// 铁律：**全部落在系统持久化文档目录**（`getApplicationDocumentsDirectory()`）。
+/// 这个目录在 iOS 上会被 iCloud 备份、在 Android 上是应用私有持久区，
+/// App 覆盖升级不会丢失；而 Temporary / Cache 目录随时可能被系统清空。
+///
+/// 目录结构：
+/// ```
+/// <Documents>/
+///   LocalVoiceSync/                 ← Syncthing 同步根目录
+///     .stignore
+///     Me_Notes/
+///       .incoming/                  ← 录音中的半截文件（被 Syncthing 忽略）
+///       outbox/                     ← 手机 → Mac
+///       inbox/                      ← Mac → 手机
+///     Dad_Notes/ ...
+///     Mom_Notes/ ...
+///   LocalVoiceSyncLocal/            ← 本机独占，永不同步
+///     library.db
+///     logs/
+/// ```
+class AppPaths {
+  AppPaths._(this.documentsDir);
+
+  final Directory documentsDir;
+
+  static AppPaths? _instance;
+
+  /// 全局单例。必须在 `runApp` 之前 await 一次。
+  static AppPaths get instance {
+    final cached = _instance;
+    if (cached == null) {
+      throw StateError('AppPaths 尚未初始化，请先 await AppPaths.resolve()');
+    }
+    return cached;
+  }
+
+  static Future<AppPaths> resolve() async {
+    final docs = await getApplicationDocumentsDirectory();
+    final paths = AppPaths._(docs);
+    await paths.ensureLayout();
+    _instance = paths;
+    return paths;
+  }
+
+  Directory get syncRoot =>
+      Directory(p.join(documentsDir.path, AppConfig.syncRootName));
+
+  Directory get localRoot =>
+      Directory(p.join(documentsDir.path, AppConfig.localRootName));
+
+  Directory get logDir => Directory(p.join(localRoot.path, 'logs'));
+
+  File get databaseFile =>
+      File(p.join(localRoot.path, AppConfig.databaseFileName));
+
+  File get syncthingIgnoreFile => File(p.join(syncRoot.path, '.stignore'));
+
+  Directory memberRoot(String dirName) =>
+      Directory(p.join(syncRoot.path, dirName));
+
+  Directory incomingDir(String dirName) =>
+      Directory(p.join(memberRoot(dirName).path, AppConfig.incomingDirName));
+
+  Directory outboxDir(String dirName) =>
+      Directory(p.join(memberRoot(dirName).path, AppConfig.outboxDirName));
+
+  Directory inboxDir(String dirName) =>
+      Directory(p.join(memberRoot(dirName).path, AppConfig.inboxDirName));
+
+  /// 音频最终位置（录音完成后的家）。
+  File audioFile(String dirName, String fileName) =>
+      File(p.join(outboxDir(dirName).path, fileName));
+
+  /// outbox 里的任意文件（文本随手记等）。
+  File outboxFile(String dirName, String fileName) =>
+      File(p.join(outboxDir(dirName).path, fileName));
+
+  /// 录音过程中的临时文件位置。
+  File temporaryAudioFile(String dirName, String fileName) =>
+      File(p.join(incomingDir(dirName).path, fileName));
+
+  Future<void> ensureLayout() async {
+    await documentsDir.create(recursive: true);
+    await syncRoot.create(recursive: true);
+    await localRoot.create(recursive: true);
+    await logDir.create(recursive: true);
+  }
+
+  /// 为某个成员准备好目录骨架，并写入 `.stignore`。
+  Future<void> ensureMemberLayout(String dirName) async {
+    await memberRoot(dirName).create(recursive: true);
+    await incomingDir(dirName).create(recursive: true);
+    await outboxDir(dirName).create(recursive: true);
+    await inboxDir(dirName).create(recursive: true);
+  }
+
+  /// 写入 Syncthing 忽略规则。
+  ///
+  /// 这是"原子录音"防线的第二道保险：即使代码出 bug 把 `.tmp_` 文件留在了
+  /// 非 `.incoming` 目录，Syncthing 也不会把它传出去。
+  Future<void> writeSyncthingIgnore() async {
+    const content = '''
+// LocalVoiceSync —— 由 App 自动生成，可手工追加规则
+// 正在写入的临时文件绝不能同步出去，否则 Mac 端会拿到半截音频。
+(?d).incoming
+(?d).tmp_*
+(?d)*.tmp
+(?d)*.part
+// 系统垃圾
+(?d).DS_Store
+(?d)Thumbs.db
+''';
+    try {
+      final existing = await syncthingIgnoreFile.exists()
+          ? await syncthingIgnoreFile.readAsString()
+          : '';
+      if (existing.trim() == content.trim()) return;
+      await syncthingIgnoreFile.writeAsString(content, flush: true);
+    } on FileSystemException {
+      // 忽略：只读文件系统或权限问题不应该阻塞 App 启动。
+    }
+  }
+
+  /// 在同步根目录写一份人类可读的说明，方便家人自己排查。
+  Future<void> writeReadme() async {
+    final file = File(p.join(syncRoot.path, 'README.txt'));
+    if (await file.exists()) return;
+    const content = '''
+LocalVoiceSync 同步目录
+=======================
+
+每个家庭成员一个子目录（Me_Notes / Dad_Notes / Mom_Notes / <自定义>_Notes）。
+
+  .incoming/  录音进行中的临时文件，Syncthing 已忽略，不要手工删除
+  outbox/     手机产生的内容，等待 Mac Mini 处理
+  inbox/      Mac Mini 处理完的结构化结果（.json + .md）
+
+请不要在两个设备上同时修改同一个文件；Syncthing 会保留冲突副本（*.sync-conflict-*）。
+''';
+    try {
+      await file.writeAsString(content, flush: true);
+    } on FileSystemException {
+      // 同上，非致命。
+    }
+  }
+}

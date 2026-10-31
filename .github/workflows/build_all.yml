@@ -1,0 +1,188 @@
+name: build_all
+
+# 三端并行出包：Android / iOS / macOS。
+# 全部走「免签名」路线，免费 runner 就能跑通，产物在 Artifacts 里下载。
+#
+# 免签名的含义（务必理解，否则装不上会以为是 bug）：
+#   - APK：用 debug keystore 签名，可直接安装；
+#   - IPA：未签名，需要 Sideloadly / AltStore / 自签工具导入，或自己有开发者证书重签；
+#   - APP：未签名，首次打开要右键 →「打开」，或在系统设置里允许。
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: '3.38.7'
+  JAVA_VERSION: '17'
+
+jobs:
+  # ---------------------------------------------------------------- 质量门禁
+  quality:
+    name: 静态检查与单元测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: 拉取依赖
+        run: flutter pub get
+
+      - name: 静态分析
+        run: flutter analyze
+
+      - name: 单元测试
+        run: flutter test --reporter expanded
+
+  # ---------------------------------------------------------------- Android
+  android:
+    name: Android APK
+    runs-on: ubuntu-latest
+    needs: quality
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: 拉取依赖
+        run: flutter pub get
+
+      # 向量模型约 24MB，不进 git。CI 里现拉，失败不阻断构建
+      # （模型缺失时 App 会降级为纯关键词检索，仍然可用）。
+      - name: 下载向量模型（可选）
+        continue-on-error: true
+        run: |
+          chmod +x tool/fetch_embedding_model.sh
+          ./tool/fetch_embedding_model.sh
+
+      - name: 构建 Release APK
+        run: flutter build apk --release
+
+      - name: 重命名产物
+        run: |
+          mkdir -p dist
+          cp build/app/outputs/flutter-apk/app-release.apk \
+             "dist/LocalVoiceSync-${GITHUB_REF_NAME//\//-}.apk"
+
+      - name: 上传 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+  # ---------------------------------------------------------------- iOS
+  ios:
+    name: iOS IPA（免签名）
+    runs-on: macos-14
+    needs: quality
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: 拉取依赖
+        run: flutter pub get
+
+      - name: 下载向量模型（可选）
+        continue-on-error: true
+        run: |
+          chmod +x tool/fetch_embedding_model.sh
+          ./tool/fetch_embedding_model.sh
+
+      - name: 构建 iOS（不签名）
+        run: flutter build ios --release --no-codesign
+
+      # 未签名的 .app 打成 Payload/ 再 zip，就是标准 IPA 结构。
+      # 这样产出的包能被 Sideloadly 等工具识别并自签安装。
+      - name: 打包成 IPA
+        run: |
+          mkdir -p dist/Payload
+          cp -R build/ios/iphoneos/Runner.app dist/Payload/
+          cd dist
+          zip -qry "LocalVoiceSync-${GITHUB_REF_NAME//\//-}-unsigned.ipa" Payload
+          rm -rf Payload
+
+      - name: 上传 IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ipa-unsigned
+          path: dist/*.ipa
+          if-no-files-found: error
+          retention-days: 30
+
+  # ---------------------------------------------------------------- macOS
+  macos:
+    name: macOS APP（免签名）
+    runs-on: macos-14
+    needs: quality
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: 拉取依赖
+        run: flutter pub get
+
+      - name: 下载向量模型（可选）
+        continue-on-error: true
+        run: |
+          chmod +x tool/fetch_embedding_model.sh
+          ./tool/fetch_embedding_model.sh
+
+      - name: 构建 macOS
+        run: flutter build macos --release
+
+      # ditto 比 zip 更懂 macOS 的扩展属性与资源分叉，
+      # 用 zip 打包 .app 经常会丢掉签名相关的元数据。
+      - name: 打包 .app
+        run: |
+          mkdir -p dist
+          APP_PATH=$(find build/macos/Build/Products/Release -maxdepth 1 -name "*.app" | head -1)
+          echo "打包 $APP_PATH"
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" \
+            "dist/LocalVoiceSync-${GITHUB_REF_NAME//\//-}-macos.zip"
+
+      - name: 上传 APP
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-app-unsigned
+          path: dist/*.zip
+          if-no-files-found: error
+          retention-days: 30

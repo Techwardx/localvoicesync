@@ -1,0 +1,21 @@
+# LocalVoiceSync —— Mac 端流水线依赖
+#
+# 安装：
+#   python3.12 -m venv .venv
+#   .venv/bin/pip install -r requirements.txt
+#
+# 说明：为什么不用 PyTorch
+#   faster-whisper 走 CTranslate2，fastembed 走 onnxruntime，
+#   两者都不依赖 PyTorch，整套依赖装完约 400MB，而 torch 一个就 2GB+。
+
+faster-whisper>=1.1.1
+# 显式声明 numpy / av：faster-whisper 只写了 av>=11，
+# 但 PyAV 19 改了 av.open() 的签名，会让它内部解码直接崩。
+# 我们不依赖它的解码路径（见 audio_utils.py），所以不锁 av 版本，
+# 但把 numpy 写死，避免不同解析结果带来的数组类型差异。
+numpy>=1.26
+av>=11
+watchdog>=4.0.0
+requests>=2.31.0
+fastembed>=0.4.2
+python-dotenv>=1.0.1

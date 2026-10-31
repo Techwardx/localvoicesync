@@ -137,9 +137,29 @@ HyperOS / MIUI 默认会在息屏后掐掉后台，前台录音服务和 Syncthi
 export JAVA_HOME="$HOME/Android/jdk-17/Contents/Home"
 export ANDROID_HOME="$HOME/Android/sdk"
 
-flutter build apk --release                  # 全 ABI，约 96MB
-flutter build apk --release --split-per-abi  # 按 ABI 拆分，arm64 约 40MB
+flutter build apk --release --split-per-abi  # 按 ABI 拆分，arm64 约 53MB
+flutter build apk --release                  # 全 ABI 单包，约 62MB
 ```
+
+**升级已安装的 App 时，必须用 `--split-per-abi`。**
+
+这不是口味问题，是硬性约束：`--split-per-abi` 会给每个 ABI 的 `versionCode`
+加上偏移（arm64 = 2000 + `pubspec.yaml` 里的 build number），
+而全 ABI 单包用的是原始值。于是「先装 split 包、再装全 ABI 包」等于
+**降级安装**，Android 会直接拒绝，HyperOS 上表现为
+**「应用未安装，安装包似乎无效」**——文案完全没提版本号，极难自查。
+
+真机排障：
+
+```bash
+BT=$(ls -d "$HOME/Android/sdk/build-tools/"*/ | tail -1)
+"${BT}aapt2" dump badging app-arm64-v8a-release.apk | head -1   # 看 versionCode
+"${BT}apksigner" verify --print-certs -v app-arm64-v8a-release.apk
+```
+
+- `versionCode` 必须**大于**手机上已装的版本
+- 签名证书必须**完全一致**，否则只能先卸载（会丢本机数据库，但同步目录里的
+  json 还在，重装后会重新入库）
 
 本机工具链装法（macOS arm64，不需要 Android Studio）：
 

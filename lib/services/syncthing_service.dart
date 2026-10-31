@@ -57,33 +57,115 @@ class SyncthingConfig {
       );
 }
 
+/// 诊断中的一步。设置页会把这些逐行显示出来。
+class ProbeStep {
+  const ProbeStep(this.label, this.ok, [this.detail = '']);
+
+  final String label;
+  final bool ok;
+  final String detail;
+
+  String get line => '${ok ? '✓' : '✗'} $label${detail.isEmpty ? '' : ' — $detail'}';
+}
+
+/// 一次完整探测的结果：既有给状态灯用的 [status]，也有给人看的 [steps]。
+class SyncthingDiagnosis {
+  const SyncthingDiagnosis({required this.status, required this.steps});
+
+  final SyncStatus status;
+  final List<ProbeStep> steps;
+
+  String get report => steps.map((s) => s.line).join('\n');
+}
+
 /// Syncthing REST 探测器。
 ///
 /// 为什么用 REST 而不是 ping：
 /// 只有 Syncthing 自己知道"还有 3 个文件没传完"（`needFiles`），
 /// ping 只能告诉你"机器活着"。黄灯上那个数字必须是真实的待同步量，
 /// 否则用户会以为记录丢了。
+///
+/// 为什么要有 [diagnose]：
+/// 之前"离线"只有一句话，用户无法判断到底是 API Key 错了、文件夹 ID 错了、
+/// 还是 Syncthing 根本没在跑。这三个原因的修法完全不同，必须分开说。
 class SyncthingService {
   const SyncthingService();
 
+  /// 只关心结果时用这个。
   Future<SyncStatus> probe({
     required SyncthingConfig config,
     required int localPending,
   }) async {
-    if (!config.isConfigured) {
+    final diagnosis = await diagnose(
+      config: config,
+      localPending: localPending,
+    );
+    return diagnosis.status;
+  }
+
+  /// 完整探测，返回每一步的成败，供设置页展示。
+  Future<SyncthingDiagnosis> diagnose({
+    required SyncthingConfig config,
+    required int localPending,
+  }) async {
+    final steps = <ProbeStep>[];
+
+    SyncStatus fail(String detail) {
+      AppLog.d('sync', '探测失败：$detail');
       return SyncStatus(
-        state: LinkState.unconfigured,
+        state: LinkState.offline,
         pendingFiles: localPending,
-        detail: '未配置 Syncthing',
+        detail: detail,
         checkedAt: DateTime.now(),
       );
     }
+
+    if (!config.isConfigured) {
+      steps.add(const ProbeStep('已填写 API Key 与文件夹 ID', false, '未配置'));
+      return SyncthingDiagnosis(
+        status: SyncStatus(
+          state: LinkState.unconfigured,
+          pendingFiles: localPending,
+          detail: '未配置 Syncthing',
+          checkedAt: DateTime.now(),
+        ),
+        steps: steps,
+      );
+    }
+    steps.add(const ProbeStep('已填写 API Key 与文件夹 ID', true));
 
     final client = http.Client();
     try {
       final base = config.baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
       final headers = <String, String>{'X-API-Key': config.apiKey.trim()};
 
+      // ---- 第 1 步：这台设备上的 Syncthing 到底有没有在跑
+      try {
+        final ping = await client
+            .get(Uri.parse('$base/rest/noauth/health'))
+            .timeout(AppConfig.syncthingHttpTimeout);
+        steps.add(
+          ProbeStep(
+            '能连上 Syncthing（$base）',
+            ping.statusCode == 200,
+            'HTTP ${ping.statusCode}',
+          ),
+        );
+        if (ping.statusCode != 200) {
+          return SyncthingDiagnosis(
+            status: fail('Syncthing 无响应（HTTP ${ping.statusCode}）'),
+            steps: steps,
+          );
+        }
+      } on Object catch (error) {
+        steps.add(ProbeStep('能连上 Syncthing（$base）', false, '$error'));
+        return SyncthingDiagnosis(
+          status: fail('连不上 $base，Syncthing 可能没在运行'),
+          steps: steps,
+        );
+      }
+
+      // ---- 第 2 步：API Key 对不对（用需要鉴权的接口试）
       final statusUri = Uri.parse(
         '$base/rest/db/status?folder=${Uri.encodeQueryComponent(config.folderId.trim())}',
       );
@@ -91,45 +173,75 @@ class SyncthingService {
           .get(statusUri, headers: headers)
           .timeout(AppConfig.syncthingHttpTimeout);
 
+      if (response.statusCode == 401 || response.statusCode == 403) {
+        steps.add(
+          ProbeStep('API Key 有效', false, 'HTTP ${response.statusCode}'),
+        );
+        return SyncthingDiagnosis(
+          status: fail('API Key 不对（HTTP ${response.statusCode}）'),
+          steps: steps,
+        );
+      }
+      steps.add(const ProbeStep('API Key 有效', true));
+
+      if (response.statusCode == 404) {
+        steps.add(
+          ProbeStep('文件夹 ID「${config.folderId.trim()}」存在', false, 'HTTP 404'),
+        );
+        return SyncthingDiagnosis(
+          status: fail('文件夹 ID 不对：${config.folderId.trim()}'),
+          steps: steps,
+        );
+      }
       if (response.statusCode != 200) {
-        return SyncStatus(
-          state: LinkState.offline,
-          pendingFiles: localPending,
-          detail: 'Syncthing 返回 ${response.statusCode}',
-          checkedAt: DateTime.now(),
+        steps.add(
+          ProbeStep('读取文件夹状态', false, 'HTTP ${response.statusCode}'),
+        );
+        return SyncthingDiagnosis(
+          status: fail('Syncthing 返回 ${response.statusCode}'),
+          steps: steps,
         );
       }
 
       final decoded = jsonDecode(response.body);
       if (decoded is! Map) {
-        return SyncStatus(
-          state: LinkState.offline,
-          pendingFiles: localPending,
-          detail: '响应格式异常',
-          checkedAt: DateTime.now(),
+        steps.add(const ProbeStep('解析文件夹状态', false, '响应不是对象'));
+        return SyncthingDiagnosis(
+          status: fail('响应格式异常'),
+          steps: steps,
         );
       }
+      steps.add(const ProbeStep('文件夹状态可读', true));
+
       final needFiles = (decoded['needFiles'] as num?)?.toInt() ?? 0;
       final folderState = (decoded['state'] ?? 'idle').toString();
 
-      // 有指定远端设备时，进一步确认它真的在线。
+      // ---- 第 3 步：Mac 那台设备在线吗
       var remoteConnected = true;
-      if (config.remoteDeviceId.trim().isNotEmpty) {
-        remoteConnected = await _isRemoteConnected(
+      final wanted = config.remoteDeviceId.trim();
+      if (wanted.isNotEmpty) {
+        final result = await _remoteState(
           client: client,
           base: base,
           headers: headers,
-          deviceId: config.remoteDeviceId.trim(),
+          deviceId: wanted,
         );
-      }
-
-      if (!remoteConnected) {
-        return SyncStatus(
-          state: LinkState.offline,
-          pendingFiles: localPending,
-          detail: 'Mac 设备未连接',
-          checkedAt: DateTime.now(),
+        remoteConnected = result.connected;
+        steps.add(
+          ProbeStep(
+            'Mac 设备已连接',
+            remoteConnected,
+            remoteConnected ? '' : result.detail,
+          ),
         );
+        if (!remoteConnected) {
+          return SyncthingDiagnosis(
+            status: fail(result.detail),
+            steps: steps,
+          );
+        }
+      } else {
+        steps.add(const ProbeStep('Mac 设备已连接', true, '未填设备 ID，跳过'));
       }
 
       final busy =
@@ -137,26 +249,37 @@ class SyncthingService {
           folderState == 'syncing' ||
           folderState == 'scanning' ||
           folderState == 'sync-preparing';
-      return SyncStatus(
-        state: busy ? LinkState.syncing : LinkState.connected,
-        pendingFiles: busy ? needFiles : 0,
-        detail: busy ? '同步中（$folderState）' : '已连接',
-        checkedAt: DateTime.now(),
+      steps.add(
+        ProbeStep('没有待传输文件', !busy, busy ? '$needFiles 个' : ''),
+      );
+
+      return SyncthingDiagnosis(
+        status: SyncStatus(
+          state: busy ? LinkState.syncing : LinkState.connected,
+          pendingFiles: busy ? needFiles : 0,
+          detail: busy ? '同步中（$folderState）' : '已连接',
+          checkedAt: DateTime.now(),
+        ),
+        steps: steps,
       );
     } on Object catch (error) {
-      AppLog.d('sync', 'Syncthing 探测失败：$error');
-      return SyncStatus(
-        state: LinkState.offline,
-        pendingFiles: localPending,
-        detail: '无法连接 Syncthing',
-        checkedAt: DateTime.now(),
+      steps.add(ProbeStep('探测过程未抛异常', false, '$error'));
+      return SyncthingDiagnosis(
+        status: fail('探测异常：$error'),
+        steps: steps,
       );
     } finally {
       client.close();
     }
   }
 
-  Future<bool> _isRemoteConnected({
+  /// 设备 ID 比较必须宽容：
+  /// Syncthing 展示时带连字符（`Z3JXJNT-RMKH...`），用户手工抄写时
+  /// 很容易多打/漏打连字符、大小写写错。这里统一去掉所有非字母数字再比。
+  static String _normaliseDeviceId(String raw) =>
+      raw.replaceAll(RegExp(r'[^A-Za-z0-9]'), '').toUpperCase();
+
+  Future<({bool connected, String detail})> _remoteState({
     required http.Client client,
     required String base,
     required Map<String, String> headers,
@@ -166,16 +289,37 @@ class SyncthingService {
       final response = await client
           .get(Uri.parse('$base/rest/system/connections'), headers: headers)
           .timeout(AppConfig.syncthingHttpTimeout);
-      if (response.statusCode != 200) return true; // 拿不到就不下结论
+      if (response.statusCode != 200) {
+        // 拿不到就不下结论，别把"读不到"误报成"离线"。
+        return (connected: true, detail: 'HTTP ${response.statusCode}');
+      }
       final decoded = jsonDecode(response.body);
-      if (decoded is! Map) return true;
+      if (decoded is! Map) return (connected: true, detail: '响应不是对象');
       final connections = decoded['connections'];
-      if (connections is! Map) return true;
-      final device = connections[deviceId];
-      if (device is! Map) return true;
-      return device['connected'] == true;
-    } on Object {
-      return true;
+      if (connections is! Map) return (connected: true, detail: '缺少 connections');
+
+      final wanted = _normaliseDeviceId(deviceId);
+      Map? matched;
+      for (final entry in connections.entries) {
+        if (_normaliseDeviceId(entry.key.toString()) == wanted) {
+          matched = entry.value is Map ? entry.value as Map : null;
+          break;
+        }
+      }
+      if (matched == null) {
+        final known = connections.keys.map((k) => k.toString().substring(0, 7)).join(', ');
+        return (
+          connected: false,
+          detail: '这台 Syncthing 里没有该设备（已知：${known.isEmpty ? '无' : known}）',
+        );
+      }
+      final connected = matched['connected'] == true;
+      return (
+        connected: connected,
+        detail: connected ? '' : '设备已配对但当前未建立连接（Mac 端 Syncthing 没开？）',
+      );
+    } on Object catch (error) {
+      return (connected: true, detail: '$error');
     }
   }
 }

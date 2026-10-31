@@ -61,7 +61,24 @@ class _StatusLightState extends ConsumerState<StatusLight>
       message: status.detail.isEmpty ? status.shortLabel : status.detail,
       child: InkWell(
         borderRadius: BorderRadius.circular(20),
-        onTap: () => ref.read(syncStatusProvider.notifier).refresh(),
+        // 手机上 Tooltip 要长按才出来，几乎没人会发现。
+        // 所以点一下：立即重新探测，并把"为什么离线"直接弹出来。
+        onTap: () async {
+          await ref.read(syncStatusProvider.notifier).refresh();
+          if (!context.mounted) return;
+          final latest = ref.read(syncStatusProvider);
+          final message = latest.detail.isEmpty
+              ? latest.shortLabel
+              : '${latest.shortLabel} · ${latest.detail}';
+          ScaffoldMessenger.of(context)
+            ..hideCurrentSnackBar()
+            ..showSnackBar(
+              SnackBar(
+                content: Text(message),
+                duration: const Duration(seconds: 4),
+              ),
+            );
+        },
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
           child: Row(

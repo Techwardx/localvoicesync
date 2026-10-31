@@ -27,6 +27,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   String _dbSummary = '正在统计…';
   bool _savingSync = false;
 
+  /// 上一次连接诊断的逐行结果，留在页面上方便截图。
+  String _syncReport = '';
+
+  /// 上一次收件箱扫描的逐行结果。
+  String _inboxReport = '';
+
   @override
   void initState() {
     super.initState();
@@ -65,25 +71,79 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
   Future<void> _saveSyncthing() async {
     setState(() => _savingSync = true);
-    await ref
-        .read(settingsProvider.notifier)
-        .updateSyncthing(
-          SyncthingConfig(
-            baseUrl: _baseUrl.text.trim().isEmpty
-                ? 'http://127.0.0.1:8384'
-                : _baseUrl.text.trim(),
-            apiKey: _apiKey.text.trim(),
-            folderId: _folderId.text.trim(),
-            remoteDeviceId: _deviceId.text.trim(),
-          ),
-        );
+    final config = SyncthingConfig(
+      baseUrl: _baseUrl.text.trim().isEmpty
+          ? 'http://127.0.0.1:8384'
+          : _baseUrl.text.trim(),
+      apiKey: _apiKey.text.trim(),
+      folderId: _folderId.text.trim(),
+      remoteDeviceId: _deviceId.text.trim(),
+    );
+    await ref.read(settingsProvider.notifier).updateSyncthing(config);
+    // 保存后立刻跑一次完整诊断，把每一步的结果摊开给用户看。
+    // 只弹一句"已保存"是没用的——用户真正想知道的是"为什么还是离线"。
+    final diagnosis = await ref
+        .read(servicesProvider)
+        .syncthing
+        .diagnose(config: config, localPending: 0);
     if (!mounted) return;
-    setState(() => _savingSync = false);
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        const SnackBar(content: Text('已保存，状态灯会在几秒内更新')),
-      );
+    setState(() {
+      _savingSync = false;
+      _syncReport = diagnosis.report;
+    });
+    ref.invalidate(syncStatusProvider);
+    await _showReport(
+      '连接诊断',
+      '${diagnosis.report}\n\n结论：${diagnosis.status.detail}',
+    );
+  }
+
+  /// 手动扫一轮收件箱，并把目录里的真实内容摊出来。
+  Future<void> _scanInbox() async {
+    final services = ref.read(servicesProvider);
+    final ingested = await services.inbox.scanOnce();
+    final diag = await services.inbox.diagnose();
+    if (!mounted) return;
+    final inbox = services.inbox;
+    final last = inbox.lastScanAt;
+    final summary = <String>[
+      diag.report,
+      '',
+      '本轮新入库：$ingested',
+      '扫描到的收件箱目录：${inbox.lastInboxDirs}',
+      '看到的 .json 文件：${inbox.lastSeen}',
+      '最近扫描：${last == null ? '尚未扫描' : _fmt(last)}',
+      if (inbox.lastError.isNotEmpty) '上次错误：${inbox.lastError}',
+    ].join('\n');
+    setState(() => _inboxReport = summary);
+    ref.invalidate(memoListProvider);
+    await _showReport('收件箱诊断', summary);
+  }
+
+  static String _fmt(DateTime t) =>
+      '${t.hour.toString().padLeft(2, '0')}:'
+      '${t.minute.toString().padLeft(2, '0')}:'
+      '${t.second.toString().padLeft(2, '0')}';
+
+  Future<void> _showReport(String title, String body) async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(title, style: const TextStyle(fontSize: 16)),
+        content: SingleChildScrollView(
+          child: SelectableText(
+            body,
+            style: AppTheme.mono.copyWith(fontSize: 11.5, height: 1.55),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('关闭'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -216,6 +276,66 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                         : const Text('保存并立即探测'),
                   ),
                 ),
+              ],
+            ),
+          ),
+          _Section(
+            title: '诊断',
+            subtitle: '显示离线、或总结回不来时，先点这两个按钮',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _savingSync ? null : _saveSyncthing,
+                        icon: const Icon(Icons.wifi_tethering, size: 16),
+                        label: const Text('测试连接'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _scanInbox,
+                        icon: const Icon(Icons.inbox_outlined, size: 16),
+                        label: const Text('扫描收件箱'),
+                      ),
+                    ),
+                  ],
+                ),
+                if (_syncReport.isNotEmpty) ...[
+                  const SizedBox(height: 14),
+                  const Text(
+                    '连接',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.muted,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  SelectableText(
+                    _syncReport,
+                    style: AppTheme.mono.copyWith(fontSize: 11, height: 1.55),
+                  ),
+                ],
+                if (_inboxReport.isNotEmpty) ...[
+                  const SizedBox(height: 14),
+                  const Text(
+                    '收件箱',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.muted,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  SelectableText(
+                    _inboxReport,
+                    style: AppTheme.mono.copyWith(fontSize: 11, height: 1.55),
+                  ),
+                ],
               ],
             ),
           ),

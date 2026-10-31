@@ -42,8 +42,54 @@ void main() {
     expect(memo.rawText, contains('太阳能'));
   });
 
-  test('TODO 全部解析成 pending（语音里没有"已完成"的语义）', () {
+  // 第二份 fixture 是**文字随手记**走完整条流水线的真实产物：
+  // kind=text、audio_filename=null。音频那条路径覆盖不到这个组合，
+  // 而它恰恰是"录音能回来、文字笔记回不来"这类问题的藏身处。
+  test('文字类记录的产物（audio_filename 为 null）也能完整解析', () {
+    final file = File('test/fixtures/mac_pipeline_output_text.json');
+    final decoded = jsonDecode(file.readAsStringSync());
+    final textJson = (decoded as Map).map(
+      (key, value) => MapEntry(key.toString(), value),
+    );
+
     final memo = Memo.fromContractJson(
+      textJson,
+      authorDir: 'Me_Notes',
+      deviceId: '',
+      fallbackId: 'memo_20261031_155749',
+    );
+
+    expect(memo.id, 'memo_20261031_155749');
+    expect(memo.kind, MemoKind.text);
+    expect(memo.audioFilename, isNull);
+    expect(memo.status, MemoStatus.processed);
+    expect(memo.author, 'Me');
+    expect(memo.summary, contains('QCY'));
+    expect(memo.knowledgePoints.length, greaterThanOrEqualTo(3));
+    expect(memo.todos.single.completed, isFalse);
+    expect(memo.aliases, isNotEmpty);
+
+    // 真实向量必须是 512 维、且已 L2 归一化（模长≈1）。
+    final vector = parseFloat32List(
+      (textJson['embedding'] as List).cast<dynamic>(),
+    );
+    expect(vector, isNotNull);
+    expect(vector!.length, AppConfig.embeddingDim);
+    var norm = 0.0;
+    for (final v in vector) {
+      norm += v * v;
+    }
+    expect(norm, closeTo(1.0, 0.01));
+
+    // 数据库行往返不能丢字段。
+    final row = memo.toRow();
+    final restored = Memo.fromRow(row);
+    expect(restored.id, memo.id);
+    expect(restored.summary, memo.summary);
+    expect(restored.aliases, memo.aliases);
+  });
+
+  test('TODO 全部解析成 pending（语音里没有"已完成"的语义）', () {    final memo = Memo.fromContractJson(
       json,
       authorDir: 'Dad_Notes',
       deviceId: 'dev_local',

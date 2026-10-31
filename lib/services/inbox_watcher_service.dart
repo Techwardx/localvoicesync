@@ -35,6 +35,26 @@ class InboxWatcherService {
   /// 新记录入库后的回调（用于补算向量）。由 [Services.boot] 注入。
   Future<void> Function(Memo memo)? onIngested;
 
+  // ------------------------------------------------------------- 诊断状态
+  //
+  // 手机上拿不到 logcat 也进不了私有目录，所以这些字段是唯一的排查入口。
+  // 设置页会把它们显示出来，出问题时让用户截图即可定位。
+
+  /// 最近一次扫描的时间。
+  DateTime? lastScanAt;
+
+  /// 最近一次扫描看到的 `.json` 文件数（含已入库的）。
+  int lastSeen = 0;
+
+  /// 最近一次扫描新入库的条数。
+  int lastIngested = 0;
+
+  /// 最近一次扫描中出现的错误（空字符串表示没出错）。
+  String lastError = '';
+
+  /// 扫描到的收件箱目录数（正常情况下 = 成员数）。
+  int lastInboxDirs = 0;
+
   void start() {
     _timer?.cancel();
     _timer = Timer.periodic(AppConfig.inboxPollInterval, (_) => scanOnce());
@@ -56,6 +76,8 @@ class InboxWatcherService {
     if (_scanning) return 0;
     _scanning = true;
     var ingested = 0;
+    var seen = 0;
+    var inboxDirs = 0;
     try {
       final members = await _paths.syncRoot
           .list()
@@ -67,6 +89,7 @@ class InboxWatcherService {
         final dirName = p.basename(memberDir.path);
         final inbox = Directory(p.join(memberDir.path, AppConfig.inboxDirName));
         if (!await inbox.exists()) continue;
+        inboxDirs += 1;
 
         final files = await inbox
             .list()
@@ -79,18 +102,34 @@ class InboxWatcherService {
         for (final file in files) {
           final name = p.basename(file.path);
           if (!name.endsWith('.json')) continue;
-          if (name.endsWith('.error.json')) {
-            if (await _ingestError(file)) ingested += 1;
-            continue;
-          }
           if (name.startsWith('.')) continue;
-          if (await _ingestSuccess(file, dirName)) ingested += 1;
+          seen += 1;
+          // 单个文件出问题绝不能中断整轮扫描：之前的实现只捕获
+          // FileSystemException，一旦某条记录的解析或写库抛错，
+          // 整个 Timer 回调就静默中断，表现为"文件明明在，却永远不入库"。
+          try {
+            final ok = name.endsWith('.error.json')
+                ? await _ingestError(file)
+                : await _ingestSuccess(file, dirName);
+            if (ok) ingested += 1;
+          } on Object catch (error, stack) {
+            lastError = '$name: $error';
+            AppLog.e('inbox', '处理 $name 失败：$error\n$stack');
+          }
         }
       }
     } on FileSystemException catch (error) {
+      lastError = '扫描同步根失败：$error';
       AppLog.w('inbox', '扫描收件箱失败：$error');
+    } on Object catch (error) {
+      lastError = '扫描异常：$error';
+      AppLog.e('inbox', '扫描收件箱异常：$error');
     } finally {
       _scanning = false;
+      lastScanAt = DateTime.now();
+      lastSeen = seen;
+      lastIngested = ingested;
+      lastInboxDirs = inboxDirs;
     }
 
     if (ingested > 0) {
@@ -98,6 +137,53 @@ class InboxWatcherService {
       AppLog.i('inbox', '本轮入库 $ingested 条');
     }
     return ingested;
+  }
+
+  /// 给设置页用的快照：同步根、各成员收件箱里到底有什么。
+  Future<InboxDiagnostics> diagnose() async {
+    final lines = <String>[];
+    var totalFiles = 0;
+    try {
+      lines.add('同步根 ${_paths.syncRoot.path}');
+      lines.add(
+        '是否共享存储 ${_paths.syncRootIsShared ? '是' : '否（Syncthing 读不到）'}',
+      );
+      if (!await _paths.syncRoot.exists()) {
+        lines.add('同步根目录不存在');
+        return InboxDiagnostics(lines: lines, totalFiles: 0);
+      }
+      final members = await _paths.syncRoot
+          .list()
+          .where((e) => e is Directory)
+          .cast<Directory>()
+          .toList();
+      for (final memberDir in members) {
+        final inbox = Directory(
+          p.join(memberDir.path, AppConfig.inboxDirName),
+        );
+        if (!await inbox.exists()) {
+          lines.add('${p.basename(memberDir.path)}/inbox 不存在');
+          continue;
+        }
+        final files = await inbox
+            .list()
+            .where((e) => e is File)
+            .cast<File>()
+            .toList();
+        totalFiles += files.length;
+        final names = files
+            .map((f) => p.basename(f.path))
+            .take(6)
+            .join('、');
+        lines.add(
+          '${p.basename(memberDir.path)}/inbox 共 ${files.length} 个文件'
+          '${files.isEmpty ? '' : '：$names'}',
+        );
+      }
+    } on Object catch (error) {
+      lines.add('读取目录失败：$error');
+    }
+    return InboxDiagnostics(lines: lines, totalFiles: totalFiles);
   }
 
   Future<bool> _ingestSuccess(File file, String dirName) async {
@@ -191,6 +277,16 @@ class InboxWatcherService {
     AppLog.w('inbox', '记录 $id 处理失败');
     return true;
   }
+}
+
+/// 收件箱目录快照，给设置页的「诊断」区用。
+class InboxDiagnostics {
+  const InboxDiagnostics({required this.lines, required this.totalFiles});
+
+  final List<String> lines;
+  final int totalFiles;
+
+  String get report => lines.join('\n');
 }
 
 /// 把 JSON 数字数组转成 Float32List，顺带做合法性校验。

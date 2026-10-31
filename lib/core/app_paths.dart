@@ -193,7 +193,6 @@ class AppPaths {
   /// 在同步根目录写一份人类可读的说明，方便家人自己排查。
   Future<void> writeReadme() async {
     final file = File(p.join(syncRoot.path, 'README.txt'));
-    if (await file.exists()) return;
     const content = '''
 LocalVoiceSync 同步目录
 =======================
@@ -201,12 +200,32 @@ LocalVoiceSync 同步目录
 每个家庭成员一个子目录（Me_Notes / Dad_Notes / Mom_Notes / <自定义>_Notes）。
 
   .incoming/  录音进行中的临时文件，Syncthing 已忽略，不要手工删除
-  outbox/     手机产生的内容，等待 Mac Mini 处理
-  inbox/      Mac Mini 处理完的结构化结果（.json + .md）
+  outbox/     手机 → Mac：原始录音（memo_*.m4a）和文字随手记（memo_*.txt）
+  inbox/      Mac → 手机：处理完的结构化结果（memo_*.json + memo_*.md）
+
+⚠️ outbox / inbox 是**站在手机的视角**命名的，不是 Mac 的视角：
+
+  outbox = 手机「发出去」的东西 → 所以手机产生的原始文件都在这里
+  inbox  = 手机「收进来」的东西 → 所以 Mac 的转写总结结果都在这里
+
+在 Mac 上看到的就是同一个目录，只是对 Mac 而言方向正好相反：
+它从 outbox/ **读**任务、往 inbox/ **写**结果。
+这不是放反了，两边必须共用同一套名字才能对上。
+
+正常流程：
+  1. 手机录音 → outbox/ 出现 memo_xxx.m4a
+  2. Mac 监听到 → 转写 → 总结 → 在 inbox/ 写出 memo_xxx.json + memo_xxx.md
+  3. 手机监听到 inbox/ 的新 json → 入库 → 界面上看到摘要和待办
+
+如果 outbox/ 里长期堆着文件不动，说明 Mac 端处理服务没在跑。
+如果 inbox/ 里有 json 但手机上没显示，去 App「设置 → 诊断 → 扫描收件箱」看具体原因。
 
 请不要在两个设备上同时修改同一个文件；Syncthing 会保留冲突副本（*.sync-conflict-*）。
 ''';
     try {
+      // 内容不一致就重写：老用户升级后也能看到最新的说明。
+      final existing = await file.exists() ? await file.readAsString() : '';
+      if (existing.trim() == content.trim()) return;
       await file.writeAsString(content, flush: true);
     } on FileSystemException {
       // 同上，非致命。

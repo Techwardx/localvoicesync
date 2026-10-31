@@ -52,13 +52,17 @@ class _HomePageState extends ConsumerState<HomePage> {
     final content = _textController.text.trim();
     if (content.isEmpty || _savingNote) return;
     setState(() => _savingNote = true);
+    ref.read(lastErrorProvider.notifier).clear();
     final memo = await ref
         .read(memoListProvider.notifier)
         .addTextNote(content);
     if (!mounted) return;
     setState(() => _savingNote = false);
     if (memo == null) {
-      _toast('保存失败，请重试');
+      // 把真实原因带上。只报"保存失败，请重试"等于什么都没说，
+      // 用户在手机上又看不到日志，只能来回猜。
+      final reason = ref.read(lastErrorProvider);
+      _toast(reason.isEmpty ? '保存失败，请重试' : reason);
       return;
     }
     _textController.clear();

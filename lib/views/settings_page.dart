@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -115,6 +116,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     //   文件在、库里有条 → 入库成功，只是列表没刷新（或筛选条件挡住了）。
     final total = await services.database.totalCount();
     final pending = await services.database.pendingCount();
+    final dbInfo = await services.database.debugInfo();
     if (!mounted) return;
     final inbox = services.inbox;
     final last = inbox.lastScanAt;
@@ -124,13 +126,53 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       '本轮新入库：$ingested',
       '扫描到的收件箱目录：${inbox.lastInboxDirs}',
       '看到的 .json 文件：${inbox.lastSeen}',
+      // 这两个数字对比着看，就能判断是不是"目录列不出来"：
+      // 枚举 0 / 探测 >0 → 文件确实在，只是 App 列不出目录内容。
+      '目录枚举到 ${inbox.enumerated} 个 / 按 id 直接探到 ${inbox.probed} 个',
       '最近扫描：${last == null ? '尚未扫描' : _fmt(last)}',
       '本机数据库：共 $total 条，待处理 $pending 条',
       if (inbox.lastError.isNotEmpty) '上次错误：${inbox.lastError}',
+      '',
+      '— 数据库自检 —',
+      ...dbInfo,
+      if (ref.read(lastErrorProvider).isNotEmpty) ...[
+        '',
+        '— 最近一次操作错误 —',
+        ref.read(lastErrorProvider),
+      ],
     ].join('\n');
     setState(() => _inboxReport = summary);
     ref.invalidate(memoListProvider);
     await _showReport('收件箱诊断', summary);
+  }
+
+  /// 把今天的日志尾部摊出来。
+  ///
+  /// 手机上拿不到 logcat，也没有文件管理器能进应用私有目录，
+  /// 所以这个按钮往往是唯一能看到"到底抛了什么异常"的地方。
+  Future<void> _showLogs() async {
+    final dir = ref.read(servicesProvider).paths.logDir;
+    final now = DateTime.now();
+    final stamp =
+        '${now.year}-${now.month.toString().padLeft(2, '0')}-'
+        '${now.day.toString().padLeft(2, '0')}';
+    final file = File('${dir.path}/app-$stamp.log');
+    String body;
+    try {
+      if (!await file.exists()) {
+        body = '今天还没有日志文件。\n${file.path}';
+      } else {
+        final lines = await file.readAsLines();
+        final tail = lines.length > 120
+            ? lines.sublist(lines.length - 120)
+            : lines;
+        body = '${file.path}\n\n${tail.join('\n')}';
+      }
+    } on Object catch (error) {
+      body = '读取日志失败：$error\n${file.path}';
+    }
+    if (!mounted) return;
+    await _showReport('日志（最近 120 行）', body);
   }
 
   static String _fmt(DateTime t) =>
@@ -294,7 +336,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           ),
           _Section(
             title: '诊断',
-            subtitle: '显示离线、或总结回不来时，先点这两个按钮',
+            subtitle: '显示离线、或总结回不来时，先点这几个按钮',
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -316,6 +358,15 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                       ),
                     ),
                   ],
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: _showLogs,
+                    icon: const Icon(Icons.article_outlined, size: 16),
+                    label: const Text('查看日志'),
+                  ),
                 ),
                 if (_syncReport.isNotEmpty) ...[
                   const SizedBox(height: 14),

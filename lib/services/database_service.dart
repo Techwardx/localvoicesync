@@ -351,6 +351,58 @@ class DatabaseService {
     };
   }
 
+  /// 还没被 Mac 处理完的记录 id + 所属成员目录。
+  ///
+  /// 收件箱兜底探测要用它：有了 id 就能**直接按文件名**去读
+  /// `inbox/<id>.json`，完全不用枚举目录。
+  Future<List<({String id, String authorDir})>> unprocessedIds() async {
+    final db = await database;
+    final rows = await db.query(
+      'memos',
+      columns: <String>['id', 'author_dir'],
+      where: "status != 'processed'",
+    );
+    return rows
+        .map(
+          (row) => (
+            id: row['id']?.toString() ?? '',
+            authorDir: row['author_dir']?.toString() ?? '',
+          ),
+        )
+        .where((e) => e.id.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  /// 数据库自检：版本号、memos 的实际列、FTS 是否可用。
+  ///
+  /// 手机上拿不到 logcat，写库失败时只能靠这几行判断到底是
+  /// "迁移没跑"（缺列）还是"FTS5 不可用"还是别的问题。
+  Future<List<String>> debugInfo() async {
+    final lines = <String>[];
+    try {
+      final db = await database;
+      final version = await db.rawQuery('PRAGMA user_version');
+      lines.add('schema 版本 ${version.first.values.first}（期望 ${AppConfig.databaseVersion}）');
+      final cols = await db.rawQuery('PRAGMA table_info(memos)');
+      lines.add('memos 列 ${cols.map((c) => c['name']).join(', ')}');
+      lines.add('FTS5 ${_ftsAvailable ? '可用' : '不可用（已降级为 LIKE）'}');
+      final counts = await db.rawQuery(
+        'SELECT status, COUNT(*) AS c FROM memos GROUP BY status',
+      );
+      lines.add(
+        '按状态：'
+        '${counts.isEmpty ? '（空）' : counts.map((r) => '${r['status']}=${r['c']}').join(' ')}',
+      );
+      final vectors = await db.rawQuery('SELECT COUNT(*) AS c FROM memo_vectors');
+      lines.add('向量 ${vectors.first['c']} 条');
+      final ingested = await db.rawQuery('SELECT COUNT(*) AS c FROM ingest_log');
+      lines.add('已入库文件记录 ${ingested.first['c']} 条');
+    } on Object catch (error) {
+      lines.add('自检失败：$error');
+    }
+    return lines;
+  }
+
   /// 还没被 Mac 处理完的条数，黄灯上显示的那个数字。
   Future<int> pendingCount() async {
     final db = await database;

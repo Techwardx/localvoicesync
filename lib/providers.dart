@@ -148,6 +148,25 @@ class EmbeddingNotifier extends Notifier<EmbeddingState> {
   }
 }
 
+// ------------------------------------------------------------------ 最近错误
+
+/// 最近一次用户操作失败的**真实原因**。
+///
+/// 手机上拿不到 logcat，「保存失败，请重试」这种文案等于什么都没说。
+/// 把原始异常留给「设置 → 诊断」看，用户截一张图就能定位。
+final lastErrorProvider = NotifierProvider<LastErrorNotifier, String>(
+  LastErrorNotifier.new,
+);
+
+class LastErrorNotifier extends Notifier<String> {
+  @override
+  String build() => '';
+
+  void set(String message) => state = message;
+
+  void clear() => state = '';
+}
+
 // ------------------------------------------------------------------ 记录列表
 
 final memoListProvider =
@@ -169,7 +188,7 @@ class MemoListNotifier extends AsyncNotifier<List<Memo>> {
     state = AsyncData(await services.database.recentMemos(limit: 200));
   }
 
-  /// 写一条文本随手记。返回 null 表示失败（UI 据此提示，不抛异常）。
+  /// 写一条文本随手记。返回 null 表示**文件都没写成功**（真失败）。
   ///
   /// ⚠️ 这里必须把"保存"和"算向量"分开：
   /// 之前的实现把两者包在同一个 try 里，结果向量计算一失败（模型还没就绪、
@@ -184,14 +203,23 @@ class MemoListNotifier extends AsyncNotifier<List<Memo>> {
 
     final Memo memo;
     try {
-      memo = await services.textNotes.create(
+      final created = await services.textNotes.create(
         member: settings.member,
         deviceId: settings.deviceId,
         content: content,
         createdAt: DateTime.now(),
       );
+      memo = created.memo;
+      if (created.dbError != null) {
+        // 文件安全，只是没进库。记录之后会随 Mac 的回传结果补进来，
+        // 所以这里不能报"保存失败"——那会让用户反复点，堆出重复文件。
+        ref
+            .read(lastErrorProvider.notifier)
+            .set('文本记录已落盘，但写库失败：${created.dbError}');
+      }
     } on Object catch (error) {
       AppLog.e('note', '文本记录保存失败：$error');
+      ref.read(lastErrorProvider.notifier).set('保存失败：$error');
       return null;
     }
 

@@ -55,6 +55,15 @@ class InboxWatcherService {
   /// 扫描到的收件箱目录数（正常情况下 = 成员数）。
   int lastInboxDirs = 0;
 
+  /// 本轮**枚举目录**找到的 `.json` 数。
+  int enumerated = 0;
+
+  /// 本轮**按已知 id 直接探**到的 `.json` 数。
+  ///
+  /// 这两个数字对比着看就能定位"目录视图"问题：
+  /// 枚举 0、探测 >0 → 文件在，只是 App 列不出目录内容。
+  int probed = 0;
+
   void start() {
     _timer?.cancel();
     _timer = Timer.periodic(AppConfig.inboxPollInterval, (_) => scanOnce());
@@ -122,32 +131,133 @@ class InboxWatcherService {
 
   /// 从同步根**递归**找出所有 `<成员>/inbox/*.json`。
   ///
-  /// 为什么不再逐个成员目录列：部分 Android 设备上，对"应用自己创建、
-  /// 由别的 App（Syncthing）填充"的目录做单层 readdir 会拿到陈旧的空列表。
-  /// 从根做一次递归遍历走的是同一条路径，但能顺带覆盖成员目录被重建、
-  /// 以及成员目录名带前缀等意外情况，容错性明显更好。
+  /// 两条路并用，因为单靠第一条在真机上翻过车：
+  ///
+  /// 1. **枚举目录**（常规情况，一次递归就能拿全）；
+  /// 2. **按已知 id 直接探文件**（兜底，见 [_probeKnownIds]）。
+  ///
+  /// 真机现象：Syncthing 索引里明明有 `Me_Notes/inbox/memo_xxx.json`，
+  /// 手机端 Syncthing 也报 needFiles=0，但 App 用 `Directory.list()` 看
+  /// 那个目录是**空的**——同一层级的 `outbox/` 里 7 个文件却看得见
+  /// （那些是 App 自己写的）。也就是说"看得见自己写的、看不见别人写的"。
+  ///
+  /// 与其去赌 Android 的目录视图什么时候恢复正常，不如换一条完全不依赖
+  /// 枚举的路：这些文件叫什么名字我们本来就知道。
   Future<List<({File file, String dirName})>> _collectInboxFiles() async {
-    final out = <({File file, String dirName})>[];
-    final root = _paths.syncRoot;
-    if (!await root.exists()) return out;
+    final byPath = <String, ({File file, String dirName})>{};
 
-    await for (final entity in root.list(recursive: true, followLinks: false)) {
-      if (entity is! File) continue;
-      final name = p.basename(entity.path);
-      if (name.startsWith('.') || !name.endsWith('.json')) continue;
-      if (p.basename(p.dirname(entity.path)) != AppConfig.inboxDirName) {
-        continue;
+    final root = _paths.syncRoot;
+    if (await root.exists()) {
+      await for (final entity in root.list(
+        recursive: true,
+        followLinks: false,
+      )) {
+        if (entity is! File) continue;
+        final name = p.basename(entity.path);
+        if (name.startsWith('.') || !name.endsWith('.json')) continue;
+        if (p.basename(p.dirname(entity.path)) != AppConfig.inboxDirName) {
+          continue;
+        }
+        final memberDir = p.basename(p.dirname(p.dirname(entity.path)));
+        // `.stfolder` / `.stversions` 里不会有 inbox，但仍防一手。
+        if (memberDir.isEmpty || memberDir.startsWith('.')) continue;
+        byPath[entity.path] = (file: entity, dirName: memberDir);
       }
-      final memberDir = p.basename(p.dirname(p.dirname(entity.path)));
-      // `.stfolder` / `.stversions` 里不会有 inbox，但仍防一手。
-      if (memberDir.isEmpty || memberDir.startsWith('.')) continue;
-      out.add((file: entity, dirName: memberDir));
     }
+    enumerated = byPath.length;
+
+    // 兜底探测只在必要时做：目录枚举一旦正常，它就纯属浪费。
+    // 每 4 秒扫一轮、每个 id 两次 stat，outbox 里又只增不减，
+    // 常年跑下去会变成几千次 stat —— 所以这条路径必须"按需"。
+    final probedEntries = await _probeKnownIds(
+      includeOutbox: byPath.isEmpty,
+    );
+    probed = probedEntries.length;
+    for (final entry in probedEntries) {
+      byPath.putIfAbsent(entry.file.path, () => entry);
+    }
+
     // 先处理错误回执，避免"成功文件不存在但错误文件存在"时状态卡在 local。
-    out.sort((a, b) => a.file.path.compareTo(b.file.path));
+    final out = byPath.values.toList(growable: false)
+      ..sort((a, b) => a.file.path.compareTo(b.file.path));
     return out;
   }
 
+  /// 不枚举目录，直接按**已知文件名**去 `inbox/` 里探。
+  ///
+  /// 名字从哪来？两个都是 App 自己看得到的：
+  /// * 数据库里还没处理完的记录 → `inbox/<memo_id>.json`；
+  /// * `outbox/` 里的文件名 → Mac 会用同一个 id 回写 `inbox/<id>.json`。
+  ///
+  /// 第二条尤其重要：有些记录**写库失败了**（文件落盘成功、DB 报错），
+  /// 数据库里根本没有它们，只能靠 outbox 的文件名反推 id。
+  /// 但它也最贵，所以只在 [includeOutbox] 为真时做——也就是目录枚举
+  /// 一个文件都没找到的时候。
+  Future<List<({File file, String dirName})>> _probeKnownIds({
+    required bool includeOutbox,
+  }) async {
+    final out = <({File file, String dirName})>[];
+    final seen = <String>{};
+
+    Future<void> consider(String dirName, String id) async {
+      if (dirName.isEmpty || id.isEmpty || id.startsWith('.')) return;
+      final inbox = _paths.inboxDir(dirName);
+      for (final name in <String>['$id.json', '$id.error.json']) {
+        final file = File(p.join(inbox.path, name));
+        if (!seen.add(file.path)) continue;
+        try {
+          if (await file.exists()) {
+            out.add((file: file, dirName: dirName));
+          }
+        } on Object catch (error) {
+          lastError = '探测 $name 失败：$error';
+        }
+      }
+    }
+
+    try {
+      for (final row in await _db.unprocessedIds()) {
+        await consider(row.authorDir, row.id);
+      }
+    } on Object catch (error) {
+      lastError = '读取待处理 id 失败：$error';
+    }
+
+    if (includeOutbox) {
+      try {
+        final root = _paths.syncRoot;
+        if (await root.exists()) {
+          await for (final member in root.list(followLinks: false)) {
+            if (member is! Directory) continue;
+            final dirName = p.basename(member.path);
+            if (dirName.startsWith('.')) continue;
+            final outbox = Directory(
+              p.join(member.path, AppConfig.outboxDirName),
+            );
+            if (!await outbox.exists()) continue;
+            final names = <String>[];
+            await for (final entity in outbox.list(followLinks: false)) {
+              if (entity is! File) continue;
+              final name = p.basename(entity.path);
+              if (name.startsWith('.')) continue;
+              names.add(name);
+            }
+            // outbox 只增不减，按文件名倒序 ≈ 时间倒序（id 里带时间戳），
+            // 取最近 200 个就够了，不必为几千个历史文件反复 stat。
+            names.sort((a, b) => b.compareTo(a));
+            for (final name in names.take(200)) {
+              await consider(dirName, p.basenameWithoutExtension(name));
+            }
+          }
+        }
+      } on Object catch (error) {
+        lastError = '扫描 outbox 文件名失败：$error';
+      }
+    }
+
+    // 计数由调用方负责：诊断也要复用这个方法，但不该污染扫描统计。
+    return out;
+  }
   /// 给设置页用的快照：同步根、各成员收件箱里到底有什么。
   Future<InboxDiagnostics> diagnose() async {
     final lines = <String>[];
@@ -227,6 +337,24 @@ class InboxWatcherService {
           final count = await _countFiles(sub);
           lines.add('$name/${p.basename(sub.path)}/ → $count 个文件');
         }
+      }
+
+      // 枚举 vs 直接探测。
+      //
+      // 真机上出现过最难查的一种：Syncthing 索引里明明有
+      // `Me_Notes/inbox/memo_xxx.json`、手机端 needFiles=0，但
+      // `Directory.list()` 看那个目录是空的，而同一层级的 outbox
+      // （App 自己写的）却有 7 个文件。这两行就是判据：
+      //   探测到 >0 且枚举 =0  → 文件在，只是目录列不出来
+      //   两者都是 0            → 文件确实没到，或者根本没权限读
+      lines.add('— 枚举 vs 直接探测 —');
+      final probedFiles = await _probeKnownIds(includeOutbox: true);
+      lines.add('枚举目录找到 $totalFiles 个 / 按已知 id 直接探到 ${probedFiles.length} 个');
+      for (final entry in probedFiles.take(8)) {
+        lines.add('  ${entry.dirName}/inbox/${p.basename(entry.file.path)} → 存在');
+      }
+      if (probedFiles.length > 8) {
+        lines.add('  …共 ${probedFiles.length} 个');
       }
     } on Object catch (error) {
       lines.add('读取目录失败：$error');

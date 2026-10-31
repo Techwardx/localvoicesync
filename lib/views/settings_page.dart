@@ -253,7 +253,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           ),
           _Section(
             title: '数据目录',
-            subtitle: '全部位于系统持久化文档目录，覆盖升级不会丢失',
+            subtitle: services.paths.syncRootIsShared
+                ? '同步根在共享存储上，Syncthing 可以读取'
+                : '数据库与日志在应用私有区，覆盖升级不会丢失',
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -266,6 +268,26 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   '本机数据\n${services.paths.localRoot.path}',
                   style: AppTheme.mono.copyWith(fontSize: 11.5),
                 ),
+                if (services.paths.syncRootNeedsPermission) ...[
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          '未授予「所有文件访问」，Syncthing 读不到同步目录。',
+                          style: TextStyle(fontSize: 12, color: AppTheme.danger),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: () async {
+                          await services.enableSharedSyncRoot();
+                          if (context.mounted) setState(() {});
+                        },
+                        child: const Text('去授权'),
+                      ),
+                    ],
+                  ),
+                ],
               ],
             ),
           ),

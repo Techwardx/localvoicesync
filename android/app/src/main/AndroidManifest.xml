@@ -20,9 +20,12 @@
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 
     <!-- ==================== 外部持久化存储 ====================
-         App 的实际数据落在 getApplicationDocumentsDirectory()（应用私有持久区），
-         覆盖安装不会丢。下面两条只为兼容 Android 9 及以下、且用户把同步目录
-         指向公共目录的旧场景，新系统上不会申请。 -->
+         同步根必须放在共享存储 `/storage/emulated/0/Documents/LocalVoiceSync`，
+         否则 Syncthing（另一个 App）根本读不到我们的数据目录。
+         Android 11+ 要写公共 Documents 需要 MANAGE_EXTERNAL_STORAGE，
+         用户在首次启动时按提示手动授予「所有文件访问」即可。
+         未授予时 App 会自动降级为私有目录，自身功能完全可用，只是不同步。 -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />

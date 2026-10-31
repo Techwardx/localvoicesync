@@ -15,6 +15,12 @@ on:
   pull_request:
     branches: [main, master]
   workflow_dispatch:
+    inputs:
+      targets:
+        description: '构建哪些平台'
+        type: choice
+        options: [android, all]
+        default: android
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -98,10 +104,15 @@ jobs:
           retention-days: 30
 
   # ---------------------------------------------------------------- iOS
+  # 只在打 tag 或手动选择 all 时才跑：日常推 main 只出 Android，
+  # 省下 macOS runner 的额度（macOS 计费是 Linux 的 10 倍）。
   ios:
     name: iOS IPA（免签名）
     runs-on: macos-14
     needs: quality
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.targets == 'all')
     steps:
       - uses: actions/checkout@v4
 
@@ -147,6 +158,9 @@ jobs:
     name: macOS APP（免签名）
     runs-on: macos-14
     needs: quality
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.targets == 'all')
     steps:
       - uses: actions/checkout@v4
 

@@ -7,8 +7,21 @@ class AppConfig {
   static const String bundleId = 'com.localvoicesync.app';
 
   // ---------------------------------------------------------------- 目录布局
-  /// 会被 Syncthing 同步的目录名（位于系统文档目录下）。
+  /// 会被 Syncthing 同步的目录名。
+  ///
+  /// ⚠️ Android 上它**不在**应用私有目录里，而是在共享存储
+  /// `/storage/emulated/0/Documents/LocalVoiceSync`。
+  /// 原因：`getApplicationDocumentsDirectory()` 在 Android 上返回
+  /// `/data/user/0/<pkg>/app_flutter`，属于应用私有沙箱，
+  /// Syncthing（另一个 App）无论如何都读不到。同步根必须放在共享存储，
+  /// 这需要 `MANAGE_EXTERNAL_STORAGE`（「所有文件访问」）权限。
+  /// iOS / macOS 上仍然用文档目录（iOS 由 Möbius Sync 之类通过 Files 访问）。
   static const String syncRootName = 'LocalVoiceSync';
+
+  /// Android 共享存储根。写死而不是用 `getExternalStorageDirectory()`：
+  /// 后者返回 `/storage/emulated/0/Android/data/<pkg>/files`，
+  /// 在 Android 11+ 同样被系统挡在 Syncthing 之外。
+  static const String androidSharedRoot = '/storage/emulated/0/Documents';
 
   /// 只属于本机的数据目录名（数据库、日志），**绝不进入同步目录**。
   /// 多台设备的 SQLite 文件互相覆盖会造成不可逆的数据库损坏。

@@ -1,8 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/services.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../core/app_config.dart';
 import '../core/app_log.dart';
 import '../core/app_paths.dart';
+import '../core/family_member.dart';
 import 'audio_recorder_service.dart';
 import 'database_service.dart';
 import 'embedding_isolate.dart';
@@ -97,6 +101,42 @@ class Services {
       syncthing: const SyncthingService(),
       initialPending: pending,
     );
+  }
+
+  /// 申请「所有文件访问」并把同步根切到共享存储。
+  ///
+  /// Android 11+ 的共享存储需要 MANAGE_EXTERNAL_STORAGE。没这个权限时
+  /// App 仍然完整可用（录音、检索、播放都在），只是 Syncthing 看不到
+  /// 我们的目录，录音永远传不到 Mac。所以这一步必须显式做、显式提示。
+  ///
+  /// 返回 true 表示同步根已经落在共享存储上。
+  Future<bool> enableSharedSyncRoot() async {
+    if (paths.syncRootIsShared) return true;
+    if (!paths.syncRootNeedsPermission) return false;
+
+    final status = await Permission.manageExternalStorage.request();
+    if (!status.isGranted) {
+      AppLog.w('storage', '用户未授予「所有文件访问」，同步根仍为私有目录');
+      return false;
+    }
+    if (!await paths.promoteToSharedSyncRoot()) {
+      AppLog.w('storage', '共享存储不可写，同步根仍为私有目录');
+      return false;
+    }
+
+    // 目录骨架要在新位置重建一遍：老成员的 outbox/inbox 都在旧路径下。
+    for (final member in FamilyMember.builtIns) {
+      await paths.ensureMemberLayout(member.dirName);
+    }
+    await paths.ensureMemberLayout(initialSettings.member.dirName);
+    await paths.writeSyncthingIgnore();
+    await paths.writeReadme();
+
+    AppLog.i('storage', '同步根已切换到 ${paths.syncRoot.path}');
+    // inbox 轮询每次都会重新取 paths.syncRoot，无需重启定时器；
+    // 但立刻扫一轮，让新目录里已有的回传结果马上入库。
+    unawaited(inbox.scanOnce());
+    return true;
   }
 
   /// 把 ONNX 模型与词表读进内存。

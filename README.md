@@ -69,19 +69,34 @@ local_voice_sync/
 
 ### 运行期目录（关键）
 
+同步根与私有区**在两个不同的地方**——这不是洁癖，是 Android 的硬约束。
+
 ```
-<App Documents>/
-├── LocalVoiceSync/              ← Syncthing 同步根目录
-│   ├── .stignore                ← 自动生成，屏蔽临时文件
-│   ├── Me_Notes/
-│   │   ├── .incoming/           ← 录音中的半截文件（同步忽略）
-│   │   ├── outbox/              ← 手机 → Mac
-│   │   └── inbox/               ← Mac → 手机
-│   ├── Dad_Notes/  Mom_Notes/  <自定义>_Notes/
-└── LocalVoiceSyncLocal/         ← 本机独占，永不同步
-    ├── library.db               ← SQLite（多设备同步会互相覆盖损坏）
-    └── logs/
+# Android 同步根（共享存储，Syncthing 才看得见）
+/storage/emulated/0/Documents/LocalVoiceSync/
+├── .stignore                ← 自动生成，屏蔽临时文件
+├── Me_Notes/
+│   ├── .incoming/           ← 录音中的半截文件（同步忽略）
+│   ├── outbox/              ← 手机 → Mac
+│   └── inbox/               ← Mac → 手机
+├── Dad_Notes/  Mom_Notes/  <自定义>_Notes/
+
+# 私有区（iOS/macOS 在 <Documents> 下，Android 在 /data/user/0/<pkg>/app_flutter）
+LocalVoiceSyncLocal/
+├── library.db               ← SQLite（多设备同步会互相覆盖损坏）
+└── logs/
 ```
+
+> **为什么同步根不能在应用私有目录里**
+> `getApplicationDocumentsDirectory()` 在 Android 上返回
+> `/data/user/0/com.localvoicesync.app/app_flutter`，这是**应用私有沙箱**。
+> Syncthing 是另一个 App，无论给什么权限都进不来。
+> 所以同步根必须落在共享存储，代价是要 `MANAGE_EXTERNAL_STORAGE`
+> （「所有文件访问」）。没授予时 App 会自动退回私有目录：录音、检索、
+> 播放全都正常，只是**录音传不到 Mac**——首页会挂一条黄色提示条，不会静默失败。
+>
+> `getExternalStorageDirectory()` 也不行：它返回
+> `/storage/emulated/0/Android/data/<pkg>/files`，Android 11+ 同样把其他 App 挡在外面。
 
 > **为什么数据库必须放在同步目录之外**
 > 两台设备各自持有一个 SQLite 文件、由 Syncthing 双向覆盖，是最经典的
@@ -103,6 +118,46 @@ flutter run -d <device>
 首次启动后到「设置 → 成员」选一下这是谁的手机。
 
 > 国内网络下载模型慢：`HF_ENDPOINT=https://hf-mirror.com ./tool/fetch_embedding_model.sh`
+
+### 1.5 Android 端必做的两个授权
+
+装好 APK 后有两件事不做就等于没装：
+
+| 权限 | 在哪开 | 不开的后果 |
+| --- | --- | --- |
+| **麦克风** | 首次录音时弹窗，或 设置 → 应用管理 → 语音知识库 → 权限 | 无法录音 |
+| **所有文件访问** | 设置 → 隐私保护 → 特殊权限 → 所有文件访问权限 → 语音知识库 | 录音传不到 Mac（首页黄条提示） |
+
+另外把 **省电策略改成「无限制」**（设置 → 应用管理 → 语音知识库 → 省电策略），
+HyperOS / MIUI 默认会在息屏后掐掉后台，前台录音服务和 Syncthing 都会被误杀。
+
+### 1.6 本地直接出 APK（不需要 CI）
+
+```bash
+export JAVA_HOME="$HOME/Android/jdk-17/Contents/Home"
+export ANDROID_HOME="$HOME/Android/sdk"
+
+flutter build apk --release                  # 全 ABI，约 96MB
+flutter build apk --release --split-per-abi  # 按 ABI 拆分，arm64 约 40MB
+```
+
+本机工具链装法（macOS arm64，不需要 Android Studio）：
+
+```bash
+# JDK 17
+curl -L "https://api.adoptium.net/v3/binary/latest/17/ga/mac/aarch64/jdk/hotspot/normal/eclipse" -o /tmp/jdk.tar.gz
+mkdir -p ~/Android && tar -xzf /tmp/jdk.tar.gz -C ~/Android && mv ~/Android/jdk-17* ~/Android/jdk-17
+export JAVA_HOME="$HOME/Android/jdk-17/Contents/Home"   # 注意是 Contents/Home
+
+# Android SDK 命令行工具
+curl -L "https://dl.google.com/android/repository/commandlinetools-mac-13114758_latest.zip" -o /tmp/ct.zip
+mkdir -p ~/Android/sdk/cmdline-tools && unzip -q /tmp/ct.zip -d /tmp && mv /tmp/cmdline-tools ~/Android/sdk/cmdline-tools/latest
+
+yes | ~/Android/sdk/cmdline-tools/latest/bin/sdkmanager --sdk_root="$HOME/Android/sdk" --licenses
+~/Android/sdk/cmdline-tools/latest/bin/sdkmanager --sdk_root="$HOME/Android/sdk" \
+  "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+flutter config --android-sdk "$HOME/Android/sdk"
+```
 
 ### 2. Mac Mini 端
 

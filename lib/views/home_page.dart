@@ -25,10 +25,27 @@ class _HomePageState extends ConsumerState<HomePage> {
   final TextEditingController _textController = TextEditingController();
   bool _savingNote = false;
 
+  /// 用户刚授予「所有文件访问」后置 true，让横幅立即消失。
+  bool _storageGranted = false;
+
   @override
   void dispose() {
     _textController.dispose();
     super.dispose();
+  }
+
+  Future<void> _grantStorageAccess() async {
+    final services = ref.read(servicesProvider);
+    final ok = await services.enableSharedSyncRoot();
+    if (!mounted) return;
+    setState(() => _storageGranted = ok);
+    if (!ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('没有「所有文件访问」权限，录音只能留在这台手机上。'),
+        ),
+      );
+    }
   }
 
   Future<void> _submitText() async {
@@ -102,7 +119,13 @@ class _HomePageState extends ConsumerState<HomePage> {
   Widget build(BuildContext context) {
     final settings = ref.watch(settingsProvider);
     final memos = ref.watch(memoListProvider);
-    final recorder = ref.read(servicesProvider).recorder;
+    final services = ref.read(servicesProvider);
+    final recorder = services.recorder;
+
+    // Android 上没拿到「所有文件访问」时同步根还在私有沙箱里，
+    // Syncthing 看不到，录音永远传不到 Mac —— 必须显式提示，不能静默降级。
+    final showStorageBanner =
+        !_storageGranted && services.paths.syncRootNeedsPermission;
 
     return SafeArea(
       bottom: false,
@@ -143,6 +166,11 @@ class _HomePageState extends ConsumerState<HomePage> {
             ),
           ),
           const SizedBox(height: 8),
+          if (showStorageBanner)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
+              child: _StorageBanner(onGrant: _grantStorageAccess),
+            ),
           Expanded(
             child: memos.when(
               loading: () => const Center(
@@ -205,6 +233,78 @@ class _HomePageState extends ConsumerState<HomePage> {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => MemoDetailPage(memoId: memo.id),
+      ),
+    );
+  }
+}
+
+/// 未授予「所有文件访问」时的提醒条。
+///
+/// 这不是可选的贴心提示，而是**功能性阻断**：同步根留在应用私有沙箱里，
+/// Syncthing 作为另一个 App 读不到，录音就永远到不了 Mac。
+class _StorageBanner extends StatelessWidget {
+  const _StorageBanner({required this.onGrant});
+
+  final VoidCallback onGrant;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
+      decoration: BoxDecoration(
+        color: AppTheme.pending.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppTheme.pending.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            Icons.folder_off_outlined,
+            size: 18,
+            color: AppTheme.pending,
+          ),
+          const SizedBox(width: 10),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '录音暂时传不到 Mac',
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.ink,
+                  ),
+                ),
+                SizedBox(height: 3),
+                Text(
+                  '需要授予「所有文件访问」，同步目录才能被 Syncthing 看到。',
+                  style: TextStyle(
+                    fontSize: 12,
+                    height: 1.45,
+                    color: AppTheme.muted,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 6),
+          TextButton(
+            onPressed: onGrant,
+            style: TextButton.styleFrom(
+              foregroundColor: AppTheme.pending,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              textStyle: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            child: const Text('去授权'),
+          ),
+        ],
       ),
     );
   }

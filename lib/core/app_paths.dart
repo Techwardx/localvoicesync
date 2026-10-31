@@ -7,29 +7,45 @@ import 'app_config.dart';
 
 /// 统一管理所有磁盘路径。
 ///
-/// 铁律：**全部落在系统持久化文档目录**（`getApplicationDocumentsDirectory()`）。
-/// 这个目录在 iOS 上会被 iCloud 备份、在 Android 上是应用私有持久区，
-/// App 覆盖升级不会丢失；而 Temporary / Cache 目录随时可能被系统清空。
+/// 铁律：**全部落在系统持久化目录**，绝不用 Temporary / Cache
+/// （那两者随时可能被系统清空）。但"持久化"在两个平台上指向不同地方：
+///
+/// * **本机私有区**（数据库、日志）→ `getApplicationDocumentsDirectory()`
+/// * **同步根**（要给 Syncthing 看的）→ Android 上必须是共享存储，
+///   否则 Syncthing 作为另一个 App 进不了我们的沙箱。
 ///
 /// 目录结构：
 /// ```
-/// <Documents>/
-///   LocalVoiceSync/                 ← Syncthing 同步根目录
-///     .stignore
-///     Me_Notes/
-///       .incoming/                  ← 录音中的半截文件（被 Syncthing 忽略）
-///       outbox/                     ← 手机 → Mac
-///       inbox/                      ← Mac → 手机
-///     Dad_Notes/ ...
-///     Mom_Notes/ ...
-///   LocalVoiceSyncLocal/            ← 本机独占，永不同步
-///     library.db
-///     logs/
+/// <私有区>/LocalVoiceSyncLocal/     ← 本机独占，永不同步
+///   library.db
+///   logs/
+///
+/// <同步根>/                        ← Android: /storage/emulated/0/Documents/LocalVoiceSync
+///   .stignore                      ←   iOS/macOS: <Documents>/LocalVoiceSync
+///   README.txt
+///   Me_Notes/
+///     .incoming/                   ← 录音中的半截文件（被 Syncthing 忽略）
+///     outbox/                      ← 手机 → Mac
+///     inbox/                       ← Mac → 手机
+///   Dad_Notes/ ...
+///   Mom_Notes/ ...
 /// ```
 class AppPaths {
-  AppPaths._(this.documentsDir);
+  AppPaths._(this.documentsDir, this._syncRoot, this._syncRootShared);
 
+  /// 私有持久区。数据库与日志永远在这里。
   final Directory documentsDir;
+
+  Directory _syncRoot;
+  bool _syncRootShared;
+
+  /// 同步根当前是否落在共享存储上（只有共享存储才可能被 Syncthing 看到）。
+  bool get syncRootIsShared => _syncRootShared;
+
+  /// Android 上没拿到「所有文件访问」时会退化成私有目录，
+  /// 此时 App 自身完全可用，但录音传不到 Mac。
+  bool get syncRootNeedsPermission =>
+      Platform.isAndroid && !_syncRootShared;
 
   static AppPaths? _instance;
 
@@ -44,14 +60,59 @@ class AppPaths {
 
   static Future<AppPaths> resolve() async {
     final docs = await getApplicationDocumentsDirectory();
-    final paths = AppPaths._(docs);
+    final picked = await _pickSyncRoot(docs);
+    final paths = AppPaths._(docs, picked.$1, picked.$2);
     await paths.ensureLayout();
     _instance = paths;
     return paths;
   }
 
-  Directory get syncRoot =>
-      Directory(p.join(documentsDir.path, AppConfig.syncRootName));
+  /// 选出同步根：Android 优先共享存储，失败则退回私有目录（不阻塞启动）。
+  static Future<(Directory, bool)> _pickSyncRoot(Directory docs) async {
+    final privateDir = Directory(p.join(docs.path, AppConfig.syncRootName));
+    if (!Platform.isAndroid) {
+      return (privateDir, false);
+    }
+    final shared = Directory(
+      p.join(AppConfig.androidSharedRoot, AppConfig.syncRootName),
+    );
+    if (await _probeWritable(shared)) {
+      return (shared, true);
+    }
+    return (privateDir, false);
+  }
+
+  /// 真的写一个探针文件再删掉——比 `exists()` 可靠：
+  /// 没授予 MANAGE_EXTERNAL_STORAGE 时目录可能"存在但不可写"。
+  static Future<bool> _probeWritable(Directory dir) async {
+    try {
+      await dir.create(recursive: true);
+      final probe = File(p.join(dir.path, '.lvs_write_probe'));
+      await probe.writeAsString('ok', flush: true);
+      await probe.delete();
+      return true;
+    } on Object {
+      return false;
+    }
+  }
+
+  /// 用户在设置页点「允许访问文件」之后调用。
+  ///
+  /// 成功则把同步根切到共享存储并重建目录骨架。返回是否成功。
+  /// 注意：**数据库不跟着搬**——它必须留在私有区，搬动反而有损坏风险。
+  Future<bool> promoteToSharedSyncRoot() async {
+    if (!Platform.isAndroid || _syncRootShared) return _syncRootShared;
+    final shared = Directory(
+      p.join(AppConfig.androidSharedRoot, AppConfig.syncRootName),
+    );
+    if (!await _probeWritable(shared)) return false;
+    _syncRoot = shared;
+    _syncRootShared = true;
+    await ensureLayout();
+    return true;
+  }
+
+  Directory get syncRoot => _syncRoot;
 
   Directory get localRoot =>
       Directory(p.join(documentsDir.path, AppConfig.localRootName));

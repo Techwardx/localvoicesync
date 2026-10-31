@@ -41,7 +41,13 @@ dependencies:
   flutter_riverpod: ^3.3.2
   flutter_markdown: ^0.7.7+1
   onnxruntime: ^1.4.1
-  permission_handler: ^13.0.2
+  # 锁 12.x 的原因：permission_handler_android 从 14.0.0 起把模块的
+  # build.gradle 换成了 Kotlin DSL（`kotlin { compilerOptions { ... } }`），
+  # 在 Gradle 8.14 + AGP 8.11.1 + KGP 2.2.20 这套组合下脚本编译直接报
+  # "Unresolved reference: compilerOptions"，导致 assembleRelease 失败。
+  # 12.x 仍是 Groovy 脚本，API（含 manageExternalStorage）完全够用。
+  # 等上游修好、或本机升级 Gradle/KGP 之后再解锁。
+  permission_handler: ^12.0.3
   shared_preferences: ^2.5.5
   intl: ^0.20.3
   just_audio: ^0.10.6

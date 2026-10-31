@@ -298,24 +298,34 @@ class InboxWatcherService {
     final merged = await _db.mergeProcessed(incoming);
     await _db.markIngested(file);
 
-    // 回传的向量只有在模型一致时才能用，否则宁可不要（跨模型比对毫无意义）。
+    // 从这一行往下全是"锦上添花"，**任何失败都不能算入库失败**。
+    //
+    // 之前的实现里 upsertVector 抛错会一路冒到 scanOnce 的 catch，
+    // 于是 `ingested` 不 +1 → changes 流不推送 → 列表永远不刷新。
+    // 表现就是最坑的一种："记录确实在数据库里，界面上却一条都没有"，
+    // 用户只能靠杀进程重启才看得见。
     var vectorStored = false;
-    final rawEmbedding = json['embedding'];
-    if (rawEmbedding is List && rawEmbedding.isNotEmpty) {
-      final model = json['embedding_model']?.toString();
-      final compatible = model == null || model == AppConfig.embeddingModelId;
-      if (compatible) {
-        final vector = parseFloat32List(rawEmbedding);
-        if (vector != null && vector.length == AppConfig.embeddingDim) {
-          await _db.upsertVector(merged.id, vector);
-          vectorStored = true;
+    try {
+      // 回传的向量只有在模型一致时才能用，否则宁可不要（跨模型比对毫无意义）。
+      final rawEmbedding = json['embedding'];
+      if (rawEmbedding is List && rawEmbedding.isNotEmpty) {
+        final model = json['embedding_model']?.toString();
+        final compatible = model == null || model == AppConfig.embeddingModelId;
+        if (compatible) {
+          final vector = parseFloat32List(rawEmbedding);
+          if (vector != null && vector.length == AppConfig.embeddingDim) {
+            await _db.upsertVector(merged.id, vector);
+            vectorStored = true;
+          }
+        } else {
+          AppLog.i(
+            'inbox',
+            '向量模型不匹配（$model），忽略回传向量，改由本机重算',
+          );
         }
-      } else {
-        AppLog.i(
-          'inbox',
-          '向量模型不匹配（$model），忽略回传向量，改由本机重算',
-        );
       }
+    } on Object catch (error) {
+      AppLog.w('inbox', '回传向量写库失败，改由本机重算：$error');
     }
 
     // Mac 没给向量（或给了不兼容的），本机补算——语义检索不能有空洞。

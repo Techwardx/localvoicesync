@@ -3,7 +3,10 @@ class AppConfig {
   const AppConfig._();
 
   static const String appName = 'LocalVoiceSync';
-  static const String appVersion = '0.1.0';
+
+  /// 展示用的版本号。必须跟 `pubspec.yaml` 的 `version:` 保持一致，
+  /// 否则用户报障时说的版本号跟 APK 里实际跑的对不上。
+  static const String appVersion = '0.1.3';
   static const String bundleId = 'com.localvoicesync.app';
 
   // ---------------------------------------------------------------- 目录布局
@@ -67,7 +70,11 @@ class AppConfig {
   static const Duration amplitudeInterval = Duration(milliseconds: 100);
   static const Duration inboxPollInterval = Duration(seconds: 4);
   static const Duration syncStatusPollInterval = Duration(seconds: 8);
-  static const Duration syncthingHttpTimeout = Duration(seconds: 3);
+  /// Syncthing REST 超时。
+  ///
+  /// 别设太小：手机上的 TLS 握手偶尔要 1~2 秒，加上 Android 的省电调度，
+  /// 3 秒会把正常的偶发抖动误判成"离线"，状态灯就会闪。
+  static const Duration syncthingHttpTimeout = Duration(seconds: 6);
 
   // ---------------------------------------------------------------- 录音参数
   static const int recordBitRate = 128000;

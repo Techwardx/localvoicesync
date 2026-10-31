@@ -82,20 +82,27 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     await ref.read(settingsProvider.notifier).updateSyncthing(config);
     // 保存后立刻跑一次完整诊断，把每一步的结果摊开给用户看。
     // 只弹一句"已保存"是没用的——用户真正想知道的是"为什么还是离线"。
-    final diagnosis = await ref
-        .read(servicesProvider)
-        .syncthing
-        .diagnose(config: config, localPending: 0);
+    final syncthing = ref.read(servicesProvider).syncthing;
+    final diagnosis = await syncthing.diagnose(config: config, localPending: 0);
+    // 再问一次手机端 Syncthing **自己**怎么看待这个文件夹：路径、模式、
+    // 索引里有哪些文件。诊断"Mac 写了结果、手机收不到"时，这几行是关键——
+    // 如果它报的路径跟 App 的同步根不是同一个，问题立刻水落石出。
+    final snapshot = await syncthing.snapshot(config: config);
     if (!mounted) return;
+    final report = <String>[
+      diagnosis.report,
+      '',
+      '—— 手机端 Syncthing 自述 ——',
+      ...snapshot,
+      '',
+      '结论：${diagnosis.status.detail}',
+    ].join('\n');
     setState(() {
       _savingSync = false;
-      _syncReport = diagnosis.report;
+      _syncReport = report;
     });
     ref.invalidate(syncStatusProvider);
-    await _showReport(
-      '连接诊断',
-      '${diagnosis.report}\n\n结论：${diagnosis.status.detail}',
-    );
+    await _showReport('连接诊断', report);
   }
 
   /// 手动扫一轮收件箱，并把目录里的真实内容摊出来。
@@ -103,6 +110,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     final services = ref.read(servicesProvider);
     final ingested = await services.inbox.scanOnce();
     final diag = await services.inbox.diagnose();
+    // 数据库条数是区分两种"看不到"的关键：
+    //   文件在、库里 0 条 → 解析/入库失败；
+    //   文件在、库里有条 → 入库成功，只是列表没刷新（或筛选条件挡住了）。
+    final total = await services.database.totalCount();
+    final pending = await services.database.pendingCount();
     if (!mounted) return;
     final inbox = services.inbox;
     final last = inbox.lastScanAt;
@@ -113,6 +125,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       '扫描到的收件箱目录：${inbox.lastInboxDirs}',
       '看到的 .json 文件：${inbox.lastSeen}',
       '最近扫描：${last == null ? '尚未扫描' : _fmt(last)}',
+      '本机数据库：共 $total 条，待处理 $pending 条',
       if (inbox.lastError.isNotEmpty) '上次错误：${inbox.lastError}',
     ].join('\n');
     setState(() => _inboxReport = summary);

@@ -71,7 +71,39 @@ void main() {
         request.response.statusCode = 200;
         request.response.write(
           jsonEncode([
-            {'id': 'lvs', 'type': folderType},
+            {
+              'id': 'lvs',
+              'type': folderType,
+              'path': '/storage/emulated/0/Documents/LocalVoiceSync',
+              'paused': false,
+              'versioning': {'type': ''},
+            },
+          ]),
+        );
+      } else if (path == '/rest/db/browse') {
+        // 手机端 Syncthing 索引里的目录树。诊断就是靠它证明
+        // "文件到底有没有落到这台手机上"。
+        request.response.statusCode = 200;
+        request.response.write(
+          jsonEncode([
+            {
+              'name': 'Me_Notes',
+              'children': [
+                {
+                  'name': 'inbox',
+                  'children': [
+                    {'name': 'memo_20261031_155749.json'},
+                    {'name': 'memo_20261031_155749.md'},
+                  ],
+                },
+                {
+                  'name': 'outbox',
+                  'children': [
+                    {'name': 'memo_20261031_155749.txt'},
+                  ],
+                },
+              ],
+            },
           ]),
         );
       } else {
@@ -173,7 +205,8 @@ void main() {
     expect(step.detail, contains('sendonly'));
   });
 
-  test('设备不在连接表里时，报出它认识哪些设备', () async {    final diagnosis = await const SyncthingService().diagnose(
+  test('设备不在连接表里时，报出它认识哪些设备', () async {
+    final diagnosis = await const SyncthingService().diagnose(
       config: SyncthingConfig(
         baseUrl: base,
         apiKey: 'good-key',
@@ -186,5 +219,27 @@ void main() {
     expect(diagnosis.status.state, LinkState.offline);
     expect(diagnosis.status.detail, contains('没有该设备'));
     expect(diagnosis.status.detail, contains('M3R3PTK'));
+  });
+
+  test('快照报出手机端 Syncthing 自己的文件夹路径与索引文件', () async {
+    // 这组信息是排查"Mac 写了结果、手机收不到"的唯一证据：
+    // 只要它报的路径跟 App 的同步根不一致，问题立刻定位。
+    final lines = await const SyncthingService().snapshot(
+      config: SyncthingConfig(baseUrl: base, apiKey: 'good-key', folderId: 'lvs'),
+    );
+    final text = lines.join('\n');
+
+    expect(text, contains('/storage/emulated/0/Documents/LocalVoiceSync'));
+    expect(text, contains('sendreceive'));
+    expect(text, contains('手机端索引文件 3 个'));
+    expect(text, contains('Me_Notes/inbox/memo_20261031_155749.json'));
+    expect(text, contains('Me_Notes/outbox/memo_20261031_155749.txt'));
+  });
+
+  test('未配置时快照给出明确提示，而不是空列表', () async {
+    final lines = await const SyncthingService().snapshot(
+      config: const SyncthingConfig(),
+    );
+    expect(lines.single, contains('未配置'));
   });
 }

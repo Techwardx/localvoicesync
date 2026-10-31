@@ -121,12 +121,24 @@ class SyncthingService {
     return false;
   }
 
-  static http.Client _buildClient() {
+  /// 复用一个长连接客户端。
+  ///
+  /// 之前每次探测都新建 HttpClient：每 8 秒一轮、每轮 3~4 个请求，
+  /// 每个都要重新做一次 TLS 握手。手机上握手偶发超过 3 秒，探测就失败，
+  /// 状态灯于是"亮几秒又变离线"。复用 keep-alive 连接后只剩第一次握手。
+  static http.Client? _shared;
+
+  static http.Client _client() {
+    final existing = _shared;
+    if (existing != null) return existing;
     final inner = HttpClient()
       ..connectionTimeout = AppConfig.syncthingHttpTimeout
+      ..idleTimeout = const Duration(seconds: 30)
       // 只对回环/局域网放行自签证书；外部地址照常严格校验。
       ..badCertificateCallback = (cert, host, port) => _isTrustedHost(host);
-    return IOClient(inner);
+    final created = IOClient(inner);
+    _shared = created;
+    return created;
   }
 
   /// 用户可能把 `http://` 填成 `https://`（或反过来）。
@@ -173,7 +185,9 @@ class SyncthingService {
     }
     steps.add(const ProbeStep('已填写 API Key 与文件夹 ID', true));
 
-    final client = _buildClient();
+    // 复用同一个 keep-alive 客户端：**绝对不要 close()**，
+    // 关掉它下次探测又得重新握手，状态灯就会继续闪。
+    final client = _client();
     try {
       final headers = <String, String>{'X-API-Key': config.apiKey.trim()};
 
@@ -338,8 +352,6 @@ class SyncthingService {
         status: fail('探测异常：${_short(error)}'),
         steps: steps,
       );
-    } finally {
-      client.close();
     }
   }
 
@@ -347,6 +359,99 @@ class SyncthingService {
   static String _short(Object error) {
     final text = error.toString().replaceAll('\n', ' ');
     return text.length <= 120 ? text : '${text.substring(0, 120)}…';
+  }
+
+  /// 手机本机 Syncthing **自己**眼中的文件夹状态。
+  ///
+  /// 排查"Mac 明明写了结果、手机却收不到"这类问题时，光看 App 的文件系统
+  /// 不够——必须知道 Syncthing 认为文件夹在哪、索引里有哪些文件。
+  /// 如果它报的路径跟 App 的同步根不是同一个，问题立刻水落石出。
+  Future<List<String>> snapshot({required SyncthingConfig config}) async {
+    final lines = <String>[];
+    if (!config.isConfigured) return <String>['未配置 Syncthing，无法读取'];
+    final client = _client();
+    try {
+      String? base;
+      for (final candidate in _candidateBases(config.baseUrl)) {
+        try {
+          final ping = await client
+              .get(Uri.parse('$candidate/rest/noauth/health'))
+              .timeout(AppConfig.syncthingHttpTimeout);
+          if (ping.statusCode == 200) {
+            base = candidate;
+            break;
+          }
+        } on Object {
+          // 换下一个协议再试
+        }
+      }
+      if (base == null) return <String>['连不上 Syncthing，读不到快照'];
+
+      final headers = <String, String>{'X-API-Key': config.apiKey.trim()};
+      final folderId = config.folderId.trim();
+
+      Future<Object?> getJson(String path) async {
+        final response = await client
+            .get(Uri.parse('$base$path'), headers: headers)
+            .timeout(AppConfig.syncthingHttpTimeout);
+        if (response.statusCode != 200) return null;
+        return jsonDecode(response.body);
+      }
+
+      // 1) 文件夹配置：路径 / 模式 / 暂停 / 版本控制
+      final folders = await getJson('/rest/config/folders');
+      if (folders is List) {
+        for (final item in folders) {
+          if (item is! Map || item['id']?.toString() != folderId) continue;
+          lines.add('手机端文件夹路径 ${item['path']}');
+          lines.add(
+            '模式 ${item['type']} · 暂停 ${item['paused'] == true ? '是' : '否'}',
+          );
+          final versioning = item['versioning'];
+          if (versioning is Map) {
+            final type = versioning['type']?.toString() ?? 'none';
+            lines.add('版本控制 ${type.isEmpty ? 'none' : type}');
+          }
+        }
+      }
+
+      // 2) 手机自己的索引计数
+      final status = await getJson('/rest/db/status?folder=$folderId');
+      if (status is Map) {
+        lines.add(
+          '手机端索引 本地 ${status['localFiles']} 个 / '
+          '全局 ${status['globalFiles']} 个 / '
+          '还缺 ${status['needFiles']} 个（${status['state']}）',
+        );
+      }
+
+      // 3) 手机索引里到底有哪些文件
+      final tree = await getJson('/rest/db/browse?folder=$folderId&levels=3');
+      if (tree is List) {
+        final flat = <String>[];
+        void walk(List<dynamic> nodes, String prefix) {
+          for (final node in nodes) {
+            if (node is! Map) continue;
+            final name = node['name']?.toString() ?? '';
+            final children = node['children'];
+            if (children is List && children.isNotEmpty) {
+              walk(children, '$prefix$name/');
+            } else {
+              flat.add('$prefix$name');
+            }
+          }
+        }
+
+        walk(tree, '');
+        lines.add('手机端索引文件 ${flat.length} 个');
+        for (final name in flat.take(14)) {
+          lines.add('  $name');
+        }
+      }
+    } on Object catch (error) {
+      lines.add('读取快照失败：${_short(error)}');
+    }
+    return lines;
   }
 
   /// 读文件夹模式（`sendreceive` / `sendonly` / `receiveonly` …）。

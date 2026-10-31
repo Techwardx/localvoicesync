@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'core/app_config.dart';
+import 'core/app_log.dart';
 import 'core/family_member.dart';
 import 'models/memo.dart';
 import 'models/search_hit.dart';
@@ -169,23 +170,40 @@ class MemoListNotifier extends AsyncNotifier<List<Memo>> {
   }
 
   /// 写一条文本随手记。返回 null 表示失败（UI 据此提示，不抛异常）。
+  ///
+  /// ⚠️ 这里必须把"保存"和"算向量"分开：
+  /// 之前的实现把两者包在同一个 try 里，结果向量计算一失败（模型还没就绪、
+  /// Isolate 崩了）整次保存就返回 null —— 文件其实已经落盘、数据库也写了，
+  /// 界面却报"保存失败"，而且 `refresh()` 没执行，列表也不刷新。
+  /// 用户看到的就是"点了好几次都没反应"，还凭空多出几条重复记录。
+  ///
+  /// 向量只是锦上添花：算不出来就退化成纯关键词检索，绝不能影响保存。
   Future<Memo?> addTextNote(String content) async {
     final services = ref.read(servicesProvider);
     final settings = ref.read(settingsProvider);
+
+    final Memo memo;
     try {
-      final memo = await services.textNotes.create(
+      memo = await services.textNotes.create(
         member: settings.member,
         deviceId: settings.deviceId,
         content: content,
         createdAt: DateTime.now(),
       );
-      // 文本记录本地立刻有内容，可以马上算向量，不必等 Mac。
-      await services.search.indexMemo(memo);
-      await refresh();
-      return memo;
-    } on Object {
+    } on Object catch (error) {
+      AppLog.e('note', '文本记录保存失败：$error');
       return null;
     }
+
+    try {
+      await services.search.indexMemo(memo);
+    } on Object catch (error) {
+      AppLog.w('note', '文本记录已保存，但向量计算失败（将退化为关键词检索）：$error');
+    }
+
+    // 无论向量算没算成功，都要刷新列表——记录确实已经存下了。
+    await refresh();
+    return memo;
   }
 
   Future<void> toggleTodo(String memoId, int index, bool completed) async {

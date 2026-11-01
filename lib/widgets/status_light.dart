@@ -46,6 +46,7 @@ class _StatusLightState extends ConsumerState<StatusLight>
         return AppTheme.online;
       case LinkState.offline:
         return AppTheme.pending;
+      case LinkState.connecting:
       case LinkState.unconfigured:
         return AppTheme.idleDot;
     }

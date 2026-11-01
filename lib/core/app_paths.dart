@@ -124,6 +124,22 @@ class AppPaths {
 
   File get syncthingIgnoreFile => File(p.join(syncRoot.path, '.stignore'));
 
+  /// 同一个目录的几种等价写法。
+  ///
+  /// `/storage/emulated/0`、`/sdcard`、`/storage/self/primary` 通常指向
+  /// 同一个卷，但在**少数机型 / 权限组合**下只有其中某一种能读到。
+  /// 探测"文件到底在不在"时三种都试一遍，代价只是多两次 stat。
+  static List<String> aliasPaths(String absolute) {
+    const primary = '/storage/emulated/0';
+    if (!absolute.startsWith(primary)) return <String>[absolute];
+    final rest = absolute.substring(primary.length);
+    return <String>[
+      absolute,
+      '/sdcard$rest',
+      '/storage/self/primary$rest',
+    ];
+  }
+
   Directory memberRoot(String dirName) =>
       Directory(p.join(syncRoot.path, dirName));
 

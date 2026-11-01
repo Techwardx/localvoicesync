@@ -277,9 +277,10 @@ class SyncStatusNotifier extends Notifier<SyncStatus> {
     unawaited(refresh());
     final services = ref.read(servicesProvider);
     final configured = ref.read(settingsProvider).syncthing.isConfigured;
-    // 已经填过配置的，别先给一个"未配置"的灰灯再跳变——那会让人以为配置没保存。
+    // 已经填过配置的，先给"连接中…"（灰）而不是"离线"（黄）。
+    // 冷启动后第一次探测要做 TLS 握手，一两秒内灯就变黄会让人以为配置又坏了。
     return SyncStatus(
-      state: configured ? LinkState.offline : LinkState.unconfigured,
+      state: configured ? LinkState.connecting : LinkState.unconfigured,
       pendingFiles: services.initialPending,
       detail: configured ? '正在探测…' : '未配置 Syncthing',
     );
@@ -297,8 +298,18 @@ class SyncStatusNotifier extends Notifier<SyncStatus> {
         localPending: pending,
       );
       if (!_disposed) state = status;
-    } on Object {
+    } on Object catch (error) {
       // 探测失败本身就是"离线"的一种表现，不往 UI 抛错。
+      // 但必须留痕：否则灯一直是"连接中…"，日志里什么都没有，无从查起。
+      AppLog.w('sync', '状态刷新异常：$error');
+      if (!_disposed && state.state == LinkState.connecting) {
+        state = SyncStatus(
+          state: LinkState.offline,
+          pendingFiles: state.pendingFiles,
+          detail: '探测异常：$error',
+          checkedAt: DateTime.now(),
+        );
+      }
     } finally {
       _busy = false;
     }

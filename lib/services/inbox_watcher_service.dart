@@ -203,14 +203,18 @@ class InboxWatcherService {
       if (dirName.isEmpty || id.isEmpty || id.startsWith('.')) return;
       final inbox = _paths.inboxDir(dirName);
       for (final name in <String>['$id.json', '$id.error.json']) {
-        final file = File(p.join(inbox.path, name));
-        if (!seen.add(file.path)) continue;
-        try {
-          if (await file.exists()) {
-            out.add((file: file, dirName: dirName));
+        // 同一个目录的几种等价写法都试一遍：少数机型/权限组合下
+        // `/storage/emulated/0` 读不到、`/sdcard` 却能读到。
+        for (final alias in AppPaths.aliasPaths(p.join(inbox.path, name))) {
+          final file = File(alias);
+          if (!seen.add(file.path)) continue;
+          try {
+            if (await file.exists()) {
+              out.add((file: file, dirName: dirName));
+            }
+          } on Object catch (error) {
+            lastError = '探测 $name 失败：$error';
           }
-        } on Object catch (error) {
-          lastError = '探测 $name 失败：$error';
         }
       }
     }
@@ -339,6 +343,28 @@ class InboxWatcherService {
         }
       }
 
+      // 目录 mtime 是最硬的判据。
+      //
+      // 如果 Syncthing 真往 `Me_Notes/inbox` 里写过 12 个文件，这个目录的
+      // mtime 必须接近最近一次落盘时间。若它停在很早以前（比如只剩 App
+      // 当初 mkdir 的那个时间），说明 **Syncthing 写的根本不是这个目录** ——
+      // 那就不是 App 读不到，而是两边指向了不同的物理位置。
+      lines.add('— 收件箱目录 mtime —');
+      for (final memberDir in members) {
+        final name = p.basename(memberDir.path);
+        final inbox = Directory(p.join(memberDir.path, AppConfig.inboxDirName));
+        try {
+          if (!await inbox.exists()) {
+            lines.add('$name/inbox 不存在');
+            continue;
+          }
+          final stat = await inbox.stat();
+          lines.add('$name/inbox → ${_fmtTime(stat.modified)}');
+        } on Object catch (error) {
+          lines.add('$name/inbox stat 失败：$error');
+        }
+      }
+
       // 枚举 vs 直接探测。
       //
       // 真机上出现过最难查的一种：Syncthing 索引里明明有
@@ -349,18 +375,87 @@ class InboxWatcherService {
       //   两者都是 0            → 文件确实没到，或者根本没权限读
       lines.add('— 枚举 vs 直接探测 —');
       final probedFiles = await _probeKnownIds(includeOutbox: true);
-      lines.add('枚举目录找到 $totalFiles 个 / 按已知 id 直接探到 ${probedFiles.length} 个');
+      lines.add(
+        '枚举目录找到 $totalFiles 个 / 按已知 id 直接探到 ${probedFiles.length} 个',
+      );
       for (final entry in probedFiles.take(8)) {
         lines.add('  ${entry.dirName}/inbox/${p.basename(entry.file.path)} → 存在');
       }
       if (probedFiles.length > 8) {
         lines.add('  …共 ${probedFiles.length} 个');
       }
+
+      // 挑一个已知 id，把三种等价路径的探测结果都列出来。
+      // 这一步是为了区分"文件不在"和"这个路径写法读不到"。
+      final sample = await _sampleKnownId();
+      if (sample != null) {
+        final full = p.join(_paths.inboxDir(sample.dirName).path, '${sample.id}.json');
+        lines.add('对照 ${sample.dirName}/inbox/${sample.id}.json：');
+        for (final alias in AppPaths.aliasPaths(full)) {
+          String verdict;
+          try {
+            final f = File(alias);
+            verdict = await f.exists()
+                ? '存在（${await f.length()} 字节）'
+                : '不存在';
+          } on Object catch (error) {
+            verdict = '异常 $error';
+          }
+          lines.add('  $alias → $verdict');
+        }
+      }
     } on Object catch (error) {
       lines.add('读取目录失败：$error');
     }
     return InboxDiagnostics(lines: lines, totalFiles: totalFiles);
   }
+
+  /// 挑一个"已知 id"做对照探测：优先用数据库里未处理的记录，
+  /// 没有就退而取 outbox 里最新的文件名。
+  Future<({String dirName, String id})?> _sampleKnownId() async {
+    try {
+      final rows = await _db.unprocessedIds();
+      if (rows.isNotEmpty) {
+        return (dirName: rows.first.authorDir, id: rows.first.id);
+      }
+    } on Object {
+      // 忽略：退到 outbox
+    }
+    try {
+      final root = _paths.syncRoot;
+      if (!await root.exists()) return null;
+      await for (final member in root.list(followLinks: false)) {
+        if (member is! Directory) continue;
+        final dirName = p.basename(member.path);
+        if (dirName.startsWith('.')) continue;
+        final outbox = Directory(p.join(member.path, AppConfig.outboxDirName));
+        if (!await outbox.exists()) continue;
+        final names = <String>[];
+        await for (final entity in outbox.list(followLinks: false)) {
+          if (entity is! File) continue;
+          final name = p.basename(entity.path);
+          if (name.startsWith('.')) continue;
+          names.add(name);
+        }
+        if (names.isEmpty) continue;
+        names.sort((a, b) => b.compareTo(a));
+        return (
+          dirName: dirName,
+          id: p.basenameWithoutExtension(names.first),
+        );
+      }
+    } on Object {
+      // 忽略
+    }
+    return null;
+  }
+
+  static String _fmtTime(DateTime t) =>
+      '${t.month.toString().padLeft(2, '0')}-'
+      '${t.day.toString().padLeft(2, '0')} '
+      '${t.hour.toString().padLeft(2, '0')}:'
+      '${t.minute.toString().padLeft(2, '0')}:'
+      '${t.second.toString().padLeft(2, '0')}';
 
   static Future<int> _countFiles(Directory dir) async {
     try {

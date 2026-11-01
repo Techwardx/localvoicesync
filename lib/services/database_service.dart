@@ -33,7 +33,10 @@ class DatabaseService {
 
   final AppPaths _paths;
   Database? _database;
-  bool _ftsAvailable = true;
+
+  /// 默认 **false**：没经过 [_ensureFtsTable] 真实查询验证之前，一律当成不可用。
+  /// 反过来（默认 true）会让"表不存在"和"表可用"无法区分，代价是每次写库都失败。
+  bool _ftsAvailable = false;
 
   bool get ftsAvailable => _ftsAvailable;
 
@@ -118,7 +121,7 @@ class DatabaseService {
     final path = _paths.databaseFile.path;
     await _paths.databaseFile.parent.create(recursive: true);
     AppLog.i('db', '打开数据库 $path');
-    return openDatabase(
+    final db = await openDatabase(
       path,
       version: AppConfig.databaseVersion,
       onConfigure: (db) async {
@@ -126,14 +129,23 @@ class DatabaseService {
       },
       onCreate: (db, version) async {
         await _runMigrations(db, 0, version);
-        await _ensureFtsTable(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         AppLog.i('db', '数据库迁移 $oldVersion → $newVersion');
         await _runMigrations(db, oldVersion, newVersion);
-        await _ensureFtsTable(db);
       },
     );
+    // FTS 表必须在**每次打开**时确认，不能只放在 onCreate/onUpgrade 里。
+    //
+    // 真机上就是这么翻的车：数据库文件早就存在、版本号也没变，
+    // 于是这两个回调一次都不触发 → `memos_fts` 从来没被创建，
+    // 而 `_ftsAvailable` 还停在字段默认值 true（那是撒谎）。
+    // 结果每一次写库都在 `DELETE FROM memos_fts` 上抛
+    // `no such table: memos_fts`，整条记录跟着回滚 ——
+    // 文件明明写进了 outbox，App 里却一条都没有。
+    await _ensureFtsTable(db);
+    await _backfillFtsIfNeeded(db);
+    return db;
   }
 
   Future<void> _runMigrations(Database db, int from, int to) async {
@@ -151,6 +163,9 @@ class DatabaseService {
 
   /// FTS5 表独立创建，因为部分老系统 SQLite 未编译 FTS5。
   /// 拿不到就降级成 LIKE 检索，App 照常可用（宁可慢，不可崩）。
+  ///
+  /// 建完必须**真查一次**才算数：`CREATE ... IF NOT EXISTS` 成功不代表表能用，
+  /// 而 `_ftsAvailable` 一旦说谎，后面每次写库都会失败。
   Future<void> _ensureFtsTable(Database db) async {
     try {
       await db.execute('''
@@ -160,6 +175,10 @@ class DatabaseService {
           tokenize = 'unicode61'
         )
       ''');
+      await db.rawQuery('SELECT memo_id FROM memos_fts LIMIT 1');
+      if (!_ftsAvailable) {
+        AppLog.i('db', 'FTS5 索引表已就绪');
+      }
       _ftsAvailable = true;
     } on DatabaseException catch (error) {
       _ftsAvailable = false;
@@ -170,6 +189,9 @@ class DatabaseService {
   // ------------------------------------------------------------- 写入
 
   /// 插入或更新一条记录，并同步维护 FTS 索引。
+  ///
+  /// **搜索索引永远不能拖累记录本身。** 索引写失败只降级检索能力，
+  /// 记录该存还得存——否则就是"文件在、界面空"。
   Future<void> upsertMemo(Memo memo, {bool refreshIndex = true}) async {
     final db = await database;
     final searchText = FtsTokenizer.indexText(memo.searchableText);
@@ -181,7 +203,8 @@ class DatabaseService {
         row,
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
-      if (refreshIndex && _ftsAvailable) {
+      if (!refreshIndex || !_ftsAvailable) return;
+      try {
         await txn.delete(
           'memos_fts',
           where: 'memo_id = ?',
@@ -191,8 +214,52 @@ class DatabaseService {
           'memo_id': memo.id,
           'search_text': searchText,
         });
+      } on DatabaseException catch (error) {
+        AppLog.w('db', 'FTS 索引更新失败，本条记录仍已保存：$error');
+        if (_looksLikeMissingTable(error)) _ftsAvailable = false;
       }
     });
+  }
+
+  /// 判断异常是不是"表不存在"。
+  ///
+  /// 遇到这种要立刻把 `_ftsAvailable` 拉回 false，否则每一轮扫描、
+  /// 每一次保存都会重复抛同一个错。
+  static bool _looksLikeMissingTable(DatabaseException error) {
+    final text = error.toString().toLowerCase();
+    return text.contains('no such table') || text.contains('no such module');
+  }
+
+  /// FTS 表刚被创建出来（或条目数落后于 memos）时补建索引。
+  ///
+  /// 表是这次才建出来的 → 里面一条都没有 → 老记录一条都搜不到。
+  /// 直接用 `memos.search_text` 回填即可，不需要重新分词。
+  Future<void> _backfillFtsIfNeeded(Database db) async {
+    if (!_ftsAvailable) return;
+    try {
+      final indexed =
+          Sqflite.firstIntValue(
+            await db.rawQuery('SELECT COUNT(*) FROM memos_fts'),
+          ) ??
+          0;
+      final total =
+          Sqflite.firstIntValue(
+            await db.rawQuery('SELECT COUNT(*) FROM memos'),
+          ) ??
+          0;
+      if (indexed >= total) return;
+      await db.transaction((txn) async {
+        await txn.delete('memos_fts');
+        await txn.rawInsert(
+          'INSERT INTO memos_fts (memo_id, search_text) '
+          'SELECT id, search_text FROM memos',
+        );
+      });
+      AppLog.i('db', 'FTS 索引已回填 $total 条（原有 $indexed 条）');
+    } on DatabaseException catch (error) {
+      AppLog.w('db', 'FTS 索引回填失败（不影响记录本身）：$error');
+      if (_looksLikeMissingTable(error)) _ftsAvailable = false;
+    }
   }
 
   /// 合并 Mac 端回传的结果。
@@ -287,11 +354,16 @@ class DatabaseService {
         whereArgs: <Object?>[id],
       );
       if (_ftsAvailable) {
-        await txn.delete(
-          'memos_fts',
-          where: 'memo_id = ?',
-          whereArgs: <Object?>[id],
-        );
+        try {
+          await txn.delete(
+            'memos_fts',
+            where: 'memo_id = ?',
+            whereArgs: <Object?>[id],
+          );
+        } on DatabaseException catch (error) {
+          AppLog.w('db', 'FTS 索引清理失败，记录本身已删除：$error');
+          if (_looksLikeMissingTable(error)) _ftsAvailable = false;
+        }
       }
     });
   }

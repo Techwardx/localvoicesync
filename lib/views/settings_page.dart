@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/app_config.dart';
 import '../core/family_member.dart';
 import '../providers.dart';
+import '../services/services.dart';
 import '../services/syncthing_service.dart';
 import '../theme.dart';
 
@@ -109,6 +110,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   /// 手动扫一轮收件箱，并把目录里的真实内容摊出来。
   Future<void> _scanInbox() async {
     final services = ref.read(servicesProvider);
+    // 权限可能在本次会话中被改过（用户去系统设置里点了开关），先刷新一次。
+    services.allFilesAccess = await Services.hasAllFilesAccess();
     final ingested = await services.inbox.scanOnce();
     final diag = await services.inbox.diagnose();
     // 数据库条数是区分两种"看不到"的关键：
@@ -123,6 +126,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     final summary = <String>[
       diag.report,
       '',
+      '「所有文件访问」'
+          '${services.allFilesAccess ? '已授予' : '未授予 ← 读不到 Syncthing 写的文件'}',
       '本轮新入库：$ingested',
       '扫描到的收件箱目录：${inbox.lastInboxDirs}',
       '看到的 .json 文件：${inbox.lastSeen}',
@@ -452,13 +457,24 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   '本机数据\n${services.paths.localRoot.path}',
                   style: AppTheme.mono.copyWith(fontSize: 11.5),
                 ),
-                if (services.paths.syncRootNeedsPermission) ...[
+                const SizedBox(height: 8),
+                SelectableText(
+                  '「所有文件访问」${services.allFilesAccess ? '已授予' : '未授予'}',
+                  style: AppTheme.mono.copyWith(
+                    fontSize: 11.5,
+                    color: services.allFilesAccess
+                        ? AppTheme.muted
+                        : AppTheme.danger,
+                  ),
+                ),
+                if (services.needsAllFilesAccess) ...[
                   const SizedBox(height: 12),
                   Row(
                     children: [
                       const Expanded(
                         child: Text(
-                          '未授予「所有文件访问」，Syncthing 读不到同步目录。',
+                          '没有这个权限时，App 只能读到自己创建的文件，'
+                          'Syncthing 回传的 json 会一直看不见。',
                           style: TextStyle(fontSize: 12, color: AppTheme.danger),
                         ),
                       ),

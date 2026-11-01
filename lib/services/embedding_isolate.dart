@@ -103,6 +103,10 @@ class EmbeddingEngine {
   }
 
   /// 文本 → 归一化向量。失败返回 null。
+  ///
+  /// 超时给到 90 秒而不是 30 秒：真机上第一次推理（模型刚加载完、
+  /// CPU 还没热身）实测能超过 30 秒，一旦超时这条记录就永远没有向量，
+  /// 语义检索会静默漏掉它。宁可多等一会儿，也不要留下检索空洞。
   Future<Float32List?> embed(String text) async {
     if (!_ready) return null;
     final trimmed = text.trim();
@@ -110,7 +114,7 @@ class EmbeddingEngine {
     final result = await _invoke(<String, Object?>{
       'cmd': EmbeddingCmd.embed,
       'text': trimmed,
-    });
+    }, timeout: const Duration(seconds: 90));
     return result is Float32List ? result : null;
   }
 

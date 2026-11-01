@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../core/family_member.dart';
 import '../models/memo.dart';
@@ -40,12 +41,27 @@ class _HomePageState extends ConsumerState<HomePage> {
     if (!mounted) return;
     setState(() => _storageGranted = ok);
     if (!ok) {
+      // 系统设置页可能只是被打开了、用户还没真的打开开关；
+      // 再给一个"直接跳设置"的出口，比让人自己翻菜单靠谱。
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('没有「所有文件访问」权限，录音只能留在这台手机上。'),
+        SnackBar(
+          content: const Text('还没拿到「所有文件访问」权限'),
+          action: SnackBarAction(
+            label: '打开设置',
+            onPressed: () => unawaited(openAppSettings()),
+          ),
         ),
       );
+      return;
     }
+    // MANAGE_EXTERNAL_STORAGE 是进程级的挂载视图，授权后**通常要重启进程**
+    // 才完全生效。这里先把话说明白，省得用户以为没起作用。
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('权限已授予。请把 App 从后台划掉再打开，让它生效。'),
+        duration: Duration(seconds: 6),
+      ),
+    );
   }
 
   Future<void> _submitText() async {
@@ -126,10 +142,14 @@ class _HomePageState extends ConsumerState<HomePage> {
     final services = ref.read(servicesProvider);
     final recorder = services.recorder;
 
-    // Android 上没拿到「所有文件访问」时同步根还在私有沙箱里，
-    // Syncthing 看不到，录音永远传不到 Mac —— 必须显式提示，不能静默降级。
+    // 只要 Android 上没拿到「所有文件访问」就提示。
+    //
+    // 这里**不能**再用 `syncRootNeedsPermission`（= 同步根不在共享存储上）：
+    // HyperOS 这类 ROM 允许往 `Documents/` 写文件却不需要权限，于是
+    // 同步根早就在共享存储上了、那个条件永远是 false，横幅一次都不显示 ——
+    // 而 App 实际上读不到 Syncthing 写的任何文件。
     final showStorageBanner =
-        !_storageGranted && services.paths.syncRootNeedsPermission;
+        !_storageGranted && services.needsAllFilesAccess;
 
     return SafeArea(
       bottom: false,
@@ -274,7 +294,7 @@ class _StorageBanner extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '录音暂时传不到 Mac',
+                  '收不到 Mac 回传的总结',
                   style: TextStyle(
                     fontSize: 13.5,
                     fontWeight: FontWeight.w700,
@@ -283,7 +303,8 @@ class _StorageBanner extends StatelessWidget {
                 ),
                 SizedBox(height: 3),
                 Text(
-                  '需要授予「所有文件访问」，同步目录才能被 Syncthing 看到。',
+                  '需要授予「所有文件访问」。没有它，App 只能读到自己写的文件，'
+                  'Syncthing 回传的 json 会一直看不见。',
                   style: TextStyle(
                     fontSize: 12,
                     height: 1.45,

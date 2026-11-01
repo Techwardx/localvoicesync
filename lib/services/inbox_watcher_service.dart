@@ -64,6 +64,9 @@ class InboxWatcherService {
   /// 枚举 0、探测 >0 → 文件在，只是 App 列不出目录内容。
   int probed = 0;
 
+  /// "能写不能读"的告警只喊一次，别每 4 秒刷屏。
+  bool _warnedAboutVisibility = false;
+
   void start() {
     _timer?.cancel();
     _timer = Timer.periodic(AppConfig.inboxPollInterval, (_) => scanOnce());
@@ -91,6 +94,35 @@ class InboxWatcherService {
       final entries = await _collectInboxFiles();
       seen = entries.length;
       inboxDirs = entries.map((e) => e.dirName).toSet().length;
+
+      // "能写不能读"的典型特征：inbox 一个都读不到，outbox 里却是有文件的。
+      // 这几乎一定是没拿到「所有文件访问」——写 `Documents/` 在部分 ROM 上
+      // 不需要权限，读别的 App 创建的文件却需要。每次启动只喊一次，别刷屏。
+      if (entries.isEmpty && !_warnedAboutVisibility) {
+        _warnedAboutVisibility = true;
+        var outboxCount = 0;
+        try {
+          final root = _paths.syncRoot;
+          if (await root.exists()) {
+            await for (final member in root.list(followLinks: false)) {
+              if (member is! Directory) continue;
+              if (p.basename(member.path).startsWith('.')) continue;
+              outboxCount += await _countFiles(
+                Directory(p.join(member.path, AppConfig.outboxDirName)),
+              );
+            }
+          }
+        } on Object {
+          // 数不出来就不断言，免得日志里冒出误导性的结论。
+        }
+        if (outboxCount > 0) {
+          AppLog.w(
+            'inbox',
+            '收件箱一个文件都读不到，但 outbox 里有 $outboxCount 个 —— '
+            '典型的"能写不能读"，请检查是否授予了「所有文件访问」',
+          );
+        }
+      }
 
       for (final entry in entries) {
         final file = entry.file;

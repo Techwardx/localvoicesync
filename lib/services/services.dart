@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -35,6 +36,7 @@ class Services {
     required this.inbox,
     required this.syncthing,
     required this.initialPending,
+    required this.allFilesAccess,
   });
 
   final AppPaths paths;
@@ -51,10 +53,45 @@ class Services {
   /// 冷启动时统计的"待处理条数"，避免首帧显示 0 再跳变。
   final int initialPending;
 
+  /// 是否拿到了「所有文件访问」（`MANAGE_EXTERNAL_STORAGE`）。
+  ///
+  /// ⚠️ 这跟"同步根在不在共享存储上"**是两件事**，之前混为一谈，
+  /// 结果踩了个大坑：部分 ROM（含 HyperOS）允许 App 往 `Documents/`
+  /// **写**文件却**不给**权限，于是 `_probeWritable()` 一探就成功、
+  /// 我们就以为"已经在共享存储上了、权限没问题"，从来没去要过权限。
+  ///
+  /// 后果：App 只能读到自己创建的文件，Syncthing 写进来的
+  /// `inbox/*.json` 一律看不见 —— 目录 `stat` 得到、`list()` 却是空的，
+  /// 表现得像"文件明明在、App 就是不出来"。
+  ///
+  /// 授权之后会被 [enableSharedSyncRoot] 就地更新，所以不是 final。
+  bool allFilesAccess;
+
+  /// Android 上没拿到「所有文件访问」时为 true，需要引导用户去授权。
+  bool get needsAllFilesAccess => Platform.isAndroid && !allFilesAccess;
+
+  /// 查询当前是否持有「所有文件访问」。非 Android 平台恒为 true。
+  static Future<bool> hasAllFilesAccess() async {
+    if (!Platform.isAndroid) return true;
+    try {
+      return await Permission.manageExternalStorage.isGranted;
+    } on Object catch (error) {
+      AppLog.w('storage', '查询「所有文件访问」状态失败：$error');
+      return false;
+    }
+  }
+
   static Future<Services> boot() async {
     final paths = await AppPaths.resolve();
     AppLog.init();
     AppLog.i('boot', '文档目录 ${paths.documentsDir.path}');
+
+    final allFiles = await hasAllFilesAccess();
+    AppLog.i(
+      'boot',
+      '「所有文件访问」${allFiles ? '已授予' : '未授予'}'
+      '${Platform.isAndroid && !allFiles ? '（Syncthing 写的文件将读不到）' : ''}',
+    );
 
     final database = DatabaseService(paths);
     // 提前打开一次：数据库损坏要在这里就暴露，而不是等用户点了录音才崩。
@@ -100,41 +137,51 @@ class Services {
       inbox: inbox,
       syncthing: const SyncthingService(),
       initialPending: pending,
+      allFilesAccess: allFiles,
     );
   }
 
-  /// 申请「所有文件访问」并把同步根切到共享存储。
+  /// 申请「所有文件访问」，必要时把同步根切到共享存储。
   ///
-  /// Android 11+ 的共享存储需要 MANAGE_EXTERNAL_STORAGE。没这个权限时
-  /// App 仍然完整可用（录音、检索、播放都在），只是 Syncthing 看不到
-  /// 我们的目录，录音永远传不到 Mac。所以这一步必须显式做、显式提示。
+  /// 顺序很重要：**先要权限，再谈目录**。
   ///
-  /// 返回 true 表示同步根已经落在共享存储上。
+  /// 之前的写法是"同步根已经在共享存储上就直接 return true"，
+  /// 在 HyperOS 这类 ROM 上会直接跳过整个授权流程 —— 因为往
+  /// `Documents/` 写文件本来就不需要权限，`_probeWritable()` 一探就成功。
+  /// 结果是：写没问题、读别人的文件全被拒，Syncthing 回传的 json
+  /// 永远进不了库。所以现在无条件先查权限。
+  ///
+  /// 返回 true 表示权限已到手、同步根在共享存储上。
   Future<bool> enableSharedSyncRoot() async {
-    if (paths.syncRootIsShared) return true;
-    if (!paths.syncRootNeedsPermission) return false;
+    if (!Platform.isAndroid) return false;
 
-    final status = await Permission.manageExternalStorage.request();
-    if (!status.isGranted) {
-      AppLog.w('storage', '用户未授予「所有文件访问」，同步根仍为私有目录');
-      return false;
-    }
-    if (!await paths.promoteToSharedSyncRoot()) {
-      AppLog.w('storage', '共享存储不可写，同步根仍为私有目录');
-      return false;
+    if (!await hasAllFilesAccess()) {
+      final status = await Permission.manageExternalStorage.request();
+      allFilesAccess = status.isGranted;
+      if (!allFilesAccess) {
+        AppLog.w('storage', '用户未授予「所有文件访问」，将读不到 Syncthing 写的文件');
+        return false;
+      }
+      AppLog.i('storage', '「所有文件访问」已授予');
     }
 
-    // 目录骨架要在新位置重建一遍：老成员的 outbox/inbox 都在旧路径下。
-    for (final member in FamilyMember.builtIns) {
-      await paths.ensureMemberLayout(member.dirName);
+    if (!paths.syncRootIsShared) {
+      if (!await paths.promoteToSharedSyncRoot()) {
+        AppLog.w('storage', '共享存储不可写，同步根仍为私有目录');
+        return false;
+      }
+      // 目录骨架要在新位置重建一遍：老成员的 outbox/inbox 都在旧路径下。
+      for (final member in FamilyMember.builtIns) {
+        await paths.ensureMemberLayout(member.dirName);
+      }
+      await paths.ensureMemberLayout(initialSettings.member.dirName);
+      await paths.writeSyncthingIgnore();
+      await paths.writeReadme();
+      AppLog.i('storage', '同步根已切换到 ${paths.syncRoot.path}');
     }
-    await paths.ensureMemberLayout(initialSettings.member.dirName);
-    await paths.writeSyncthingIgnore();
-    await paths.writeReadme();
 
-    AppLog.i('storage', '同步根已切换到 ${paths.syncRoot.path}');
-    // inbox 轮询每次都会重新取 paths.syncRoot，无需重启定时器；
-    // 但立刻扫一轮，让新目录里已有的回传结果马上入库。
+    // 权限刚到手，之前读不到的文件现在应该读得到了：立刻扫一轮验证。
+    // inbox 轮询每次都会重新取 paths.syncRoot，无需重启定时器。
     unawaited(inbox.scanOnce());
     return true;
   }

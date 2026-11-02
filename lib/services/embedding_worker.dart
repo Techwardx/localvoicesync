@@ -154,7 +154,13 @@ void embeddingWorkerMain(SendPort mainSend) {
       case EmbeddingCmd.embed:
         final text = message['text'] as String? ?? '';
         if (!modelLoaded) throw StateError('模型尚未加载');
-        return runEmbedding(text);
+        // 查询要加 BGE 的检索指令前缀，文档不加 —— 这是 BGE 的非对称检索约定。
+        // 见 AppConfig.embeddingQueryInstruction 里记录的前后缀实测分数。
+        final asQuery = message['asQuery'] == true;
+        final payload = asQuery
+            ? '${AppConfig.embeddingQueryInstruction}$text'
+            : text;
+        return runEmbedding(payload);
 
       case EmbeddingCmd.upsert:
         final memoId = message['id'] as String?;

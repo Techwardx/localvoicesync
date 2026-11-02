@@ -118,6 +118,24 @@ class EmbeddingEngine {
     return result is Float32List ? result : null;
   }
 
+  /// 把**用户查询**编码成向量。
+  ///
+  /// 和 [embed] 的唯一区别是会先拼上 BGE 的检索指令前缀。这不是可有可无的
+  /// 小优化：实测加了前缀之后，无关长句的最高分从 0.52 掉到 0.41，
+  /// 而相关查询基本不掉分 —— 语义检索"搜什么都返回全部"的问题就是靠它
+  /// 配合 [AppConfig.semanticMinScore] 解决的。
+  Future<Float32List?> embedQuery(String text) async {
+    if (!_ready) return null;
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return null;
+    final result = await _invoke(<String, Object?>{
+      'cmd': EmbeddingCmd.embed,
+      'text': trimmed,
+      'asQuery': true,
+    }, timeout: const Duration(seconds: 90));
+    return result is Float32List ? result : null;
+  }
+
   /// 全量重建内存索引（App 启动时调用一次）。
   Future<void> loadIndex(List<VectorRecord> records) async {
     if (!_ready) return;

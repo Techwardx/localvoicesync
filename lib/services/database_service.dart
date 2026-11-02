@@ -182,7 +182,13 @@ class DatabaseService {
       _ftsAvailable = true;
     } on DatabaseException catch (error) {
       _ftsAvailable = false;
-      AppLog.w('db', 'FTS5 不可用，降级为 LIKE 检索：$error');
+      // 这台 ROM 的 SQLite 没编译 FTS5（小米 15 / HyperOS 实测如此）。
+      // 这不是故障：关键词检索会走 _searchLike 的命中数打分，功能可用。
+      // 用 INFO 而不是 WARN，避免每次冷启动都刷一条看着像坏了的日志。
+      AppLog.i(
+        'db',
+        'FTS5 未编译，关键词检索改用内置命中数评分（功能可用，无需处理）：$error',
+      );
     }
   }
 
@@ -571,35 +577,73 @@ class DatabaseService {
     }
   }
 
+  /// 关键词检索的**覆盖率下限**，抽成纯函数以便单测。
+  ///
+  /// 1~2 个 token（"耳机"、"蓝牙耳机"）要求全中——少一个就不是同一个话题了；
+  /// 更多 token 时至少中一半。否则"帮我看看上次说的那个东西"切出来的
+  /// "那个""东西"几乎每条记录都有，等于不设门槛，结果就是整库翻出来。
+  static int minMatchedTokens(int tokenCount) =>
+      tokenCount <= 2 ? tokenCount : (tokenCount / 2).ceil();
+
+  /// FTS5 不可用时的关键词检索（这台小米 15 的 SQLite 就没编译 FTS5，
+  /// 所以这**不是**边缘路径，是实际在跑的路径，必须靠谱）。
+  ///
+  /// 两个关键点：
+  /// 1. **按命中数打分**。之前所有行一律 `score: 1` 再按 `created_at` 倒序，
+  ///    等于"谁最新谁第一"——只要有一个 token 沾边就把大半库翻出来，
+  ///    用户看到的就是"搜什么都是全部记录"。
+  /// 2. **要求覆盖率**。查询切出来的 token 越多，要求命中的越多。
+  ///    "帮我看看上次说的那个东西"会切出 11 个二元组，其中"那个""东西"
+  ///    到处都有，不设覆盖率就等于不设门槛。
   Future<List<SearchHit>> _searchLike(String query, int limit) async {
     final db = await database;
     final tokens = FtsTokenizer.queryTokens(query);
     if (tokens.isEmpty) return const <SearchHit>[];
-    final where = <String>[];
-    final args = <Object?>[];
-    for (final token in tokens.take(8)) {
-      where.add('search_text LIKE ?');
-      args.add('%$token%');
+
+    // 去重并限长，避免超长查询把 SQL 撑成几十个 CASE。
+    final unique = <String>[];
+    final seen = <String>{};
+    for (final token in tokens) {
+      if (seen.add(token)) unique.add(token);
+      if (unique.length >= 8) break;
     }
-    args.add(limit);
+
+    final hitsExpr = unique
+        .map((_) => 'CASE WHEN search_text LIKE ? THEN 1 ELSE 0 END')
+        .join(' + ');
     final rows = await db.rawQuery(
       '''
-      SELECT * FROM memos
-      WHERE ${where.join(' OR ')}
-      ORDER BY created_at DESC
+      SELECT * FROM (
+        SELECT *, ($hitsExpr) AS hits FROM memos
+      )
+      WHERE hits > 0
+      ORDER BY hits DESC, created_at DESC
       LIMIT ?
       ''',
-      args,
+      <Object?>[
+        for (final token in unique) '%$token%',
+        limit,
+      ],
     );
-    return rows
-        .map(
-          (row) => SearchHit(
-            memo: Memo.fromRow(row),
-            score: 1,
-            source: HitSource.keyword,
-          ),
-        )
-        .toList(growable: false);
+    if (rows.isEmpty) return const <SearchHit>[];
+
+    // 覆盖率下限：1~2 个 token 必须全中；更多时至少中一半。
+    final minHits = minMatchedTokens(unique.length);
+
+    final hits = <SearchHit>[];
+    for (final row in rows) {
+      final matched = (row['hits'] as num?)?.toInt() ?? 0;
+      if (matched < minHits) continue;
+      hits.add(
+        SearchHit(
+          memo: Memo.fromRow(row),
+          // 归一化到 0~1，跟语义分数的量级对齐，便于界面统一展示。
+          score: matched / unique.length,
+          source: HitSource.keyword,
+        ),
+      );
+    }
+    return hits;
   }
 
   // ------------------------------------------------------------- 向量

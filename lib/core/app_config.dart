@@ -6,7 +6,7 @@ class AppConfig {
 
   /// 展示用的版本号。必须跟 `pubspec.yaml` 的 `version:` 保持一致，
   /// 否则用户报障时说的版本号跟 APK 里实际跑的对不上。
-  static const String appVersion = '0.1.6';
+  static const String appVersion = '0.1.7';
   static const String bundleId = 'com.localvoicesync.app';
 
   // ---------------------------------------------------------------- 目录布局
@@ -53,6 +53,36 @@ class AppConfig {
   /// 并且把模型 id 写进数据库和 JSON，未来换模型时可以做灰度与重算。
   static const String embeddingModelId = 'bge-small-zh-v1.5';
   static const int embeddingDim = 512;
+
+  /// BGE 官方要求的**查询前缀**（检索场景专用）。
+  ///
+  /// BGE 是"非对称检索"模型：文档按原样编码，查询要先加上这句指令再编码。
+  /// 官方说明不加也能用，但会掉几个点召回；实测更重要的是它**显著压低
+  /// 无关查询的基线分**——同一句无关长句，不加前缀能拿 0.52（10 条记录里
+  /// 9 条过线），加了前缀掉到 0.41（一条都过不了），而真正相关的"耳机"
+  /// 仍稳在 0.54。区分度就是这么拉开的。
+  static const String embeddingQueryInstruction = '为这个句子生成表示以用于检索相关文章：';
+
+  /// 语义检索的**绝对相似度下限**。
+  ///
+  /// 0.35 这个值是从"余弦相似度"的直觉来的，但对 BGE 系中文模型完全不适用：
+  /// 它的向量空间是各向异性的，无关短句之间本来就有 0.2~0.4 的基线，
+  /// 长句更是能到 0.5。用 0.35 的结果就是"搜什么都把全部记录翻出来"。
+  ///
+  /// 实测（10 条真实记录 + 模型自带资产，带查询前缀）：
+  /// * 相关（"耳机"→ 耳机故障记录）0.50 ~ 0.65
+  /// * 无关短句（"今天天气怎么样"）0.28 ~ 0.35
+  /// * 无关长句（"完全不相关的话题比如量子力学"）0.31 ~ 0.41
+  ///
+  /// 0.45 正好落在这两簇之间。宁可"没找到"也不要"返回一堆不相干的"——
+  /// 后者会让用户彻底不信任搜索。
+  static const double semanticMinScore = 0.45;
+
+  /// 相对上限：只保留与最高分相差不超过这个幅度的结果。
+  ///
+  /// 绝对阈值管"该不该有结果"，这个管"该有哪几条"。最强命中 0.65 时，
+  /// 0.48 的弱相关就不该挤进来占位置。
+  static const double semanticRelativeMargin = 0.12;
 
   static const String modelAssetPath = 'assets/models/bge-small-zh-v1.5.onnx';
   static const String vocabAssetPath = 'assets/models/vocab.txt';

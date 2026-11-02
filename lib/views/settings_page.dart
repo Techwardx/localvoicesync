@@ -29,6 +29,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   String _dbSummary = '正在统计…';
   bool _savingSync = false;
 
+  /// 检索自检正在跑（要现场跑三次 ONNX 推理，手机上要几秒）。
+  bool _checkingSearch = false;
+
   /// 上一次连接诊断的逐行结果，留在页面上方便截图。
   String _syncReport = '';
 
@@ -149,6 +152,25 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     setState(() => _inboxReport = summary);
     ref.invalidate(memoListProvider);
     await _showReport('收件箱诊断', summary);
+  }
+
+  /// 检索自检。
+  ///
+  /// 语义检索"结果不对"在界面上完全看不出原因，所以这里直接跑三条探测查询，
+  /// 把每条的最高分和判定摊开。正例不中 = 模型/索引有问题；
+  /// 负例命中 = 阈值要往上调。两种都有明确的下一步动作。
+  Future<void> _checkSearch() async {
+    setState(() => _checkingSearch = true);
+    final services = ref.read(servicesProvider);
+    List<String> lines;
+    try {
+      lines = await services.search.selfCheck();
+    } on Object catch (error) {
+      lines = <String>['自检失败：$error'];
+    }
+    if (!mounted) return;
+    setState(() => _checkingSearch = false);
+    await _showReport('检索自检', lines.join('\n'));
   }
 
   /// 把今天的日志尾部摊出来。
@@ -365,13 +387,24 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   ],
                 ),
                 const SizedBox(height: 8),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: _showLogs,
-                    icon: const Icon(Icons.article_outlined, size: 16),
-                    label: const Text('查看日志'),
-                  ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _checkingSearch ? null : _checkSearch,
+                        icon: const Icon(Icons.manage_search, size: 16),
+                        label: Text(_checkingSearch ? '自检中…' : '检索自检'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _showLogs,
+                        icon: const Icon(Icons.article_outlined, size: 16),
+                        label: const Text('查看日志'),
+                      ),
+                    ),
+                  ],
                 ),
                 if (_syncReport.isNotEmpty) ...[
                   const SizedBox(height: 14),

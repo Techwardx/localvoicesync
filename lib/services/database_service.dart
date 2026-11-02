@@ -496,30 +496,51 @@ class DatabaseService {
     return (rows.first['c'] as num?)?.toInt() ?? 0;
   }
 
-  /// 标签云：统计所有记录里出现过的标签。
-  Future<Map<String, int>> tagCounts() async {
+  /// 标签云：统计所有记录里出现过的标签，按**最近使用时间**排序。
+  ///
+  /// 为什么不用「按出现次数排序」：搜索页默认只展示前几个，用户期望看到的是
+  /// "我最近在记什么"，而不是"哪个标签用得最多"。半年前的常驻标签一直霸占
+  /// 前排是没意义的——那是历史统计，不是当前上下文。
+  ///
+  /// 实现上只查一列并按 created_at 倒序扫一遍：第一次遇到某个标签的顺序
+  /// 天然就是它的最近使用顺序，同时把次数累计出来，一次查询两件事都拿到。
+  Future<List<({String tag, int count})>> recentTagCounts() async {
     final db = await database;
-    final rows = await db.query('memos', columns: <String>['tags']);
-    final counter = <String, int>{};
-    for (final row in rows) {
-      final raw = row['tags'];
-      if (raw is! String || raw.isEmpty) continue;
+    final rows = await db.query(
+      'memos',
+      columns: <String>['tags'],
+      orderBy: 'created_at DESC',
+    );
+    return orderTagsByRecency(rows.map((row) => row['tags'] as String?));
+  }
+
+  /// 把「按时间倒序排列的 tags JSON 列」聚合成有序标签列表。
+  ///
+  /// 抽成纯函数是为了能单测：这段逻辑（首次出现 = 最近使用、次数累加、
+  /// 坏 JSON 跳过）是最容易写错的地方，而它不值得为此起一个真数据库。
+  static List<({String tag, int count})> orderTagsByRecency(
+    Iterable<String?> tagsJson,
+  ) {
+    final counts = <String, int>{};
+    final order = <String>[];
+    for (final raw in tagsJson) {
+      if (raw == null || raw.isEmpty) continue;
       try {
         final decoded = jsonDecode(raw);
-        if (decoded is List) {
-          for (final tag in decoded) {
-            final text = tag.toString().trim();
-            if (text.isEmpty) continue;
-            counter[text] = (counter[text] ?? 0) + 1;
-          }
+        if (decoded is! List) continue;
+        for (final tag in decoded) {
+          final text = tag.toString().trim();
+          if (text.isEmpty) continue;
+          if (!counts.containsKey(text)) order.add(text);
+          counts[text] = (counts[text] ?? 0) + 1;
         }
       } on FormatException {
         continue;
       }
     }
-    final entries = counter.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
-    return Map<String, int>.fromEntries(entries);
+    return <({String tag, int count})>[
+      for (final tag in order) (tag: tag, count: counts[tag]!),
+    ];
   }
 
   // ------------------------------------------------------------- 检索

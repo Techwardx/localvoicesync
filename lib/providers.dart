@@ -416,8 +416,13 @@ class SearchNotifier extends Notifier<SearchState> {
 
 // ------------------------------------------------------------------ 标签云
 
-final tagCountsProvider = FutureProvider<Map<String, int>>((ref) async {
+/// 标签云数据：**按最近使用排序**（不是按出现次数）。
+///
+/// 搜索页默认只展示前几个，用户期望看到的是"我最近在记什么"，
+/// 而不是"哪个标签用得最多"。
+final tagCountsProvider =
+    FutureProvider<List<({String tag, int count})>>((ref) async {
   // 依赖列表：新增/删除记录后自动重算，不需要手工 invalidate。
   ref.watch(memoListProvider);
-  return ref.watch(servicesProvider).database.tagCounts();
+  return ref.watch(servicesProvider).database.recentTagCounts();
 });

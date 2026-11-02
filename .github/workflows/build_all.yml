@@ -7,20 +7,24 @@ name: build_all
 #   - APK：用 debug keystore 签名，可直接安装；
 #   - IPA：未签名，需要 Sideloadly / AltStore / 自签工具导入，或自己有开发者证书重签；
 #   - APP：未签名，首次打开要右键 →「打开」，或在系统设置里允许。
+#
+# ⚠️ 触发方式：**只有手动**。
+#   日常 Android 出包在本地跑（`flutter build apk --release --split-per-abi`），
+#   不占 CI 额度、也不在 push 时排队。
+#   iOS 必须用 macOS runner（本地不装 Xcode），到时在 GitHub 网页上
+#   Actions → build_all → Run workflow → 选 all，即可同时产出 IPA 与 macOS APP。
+#
+#   想把整个工作流彻底关掉（连手动入口都不留）：GitHub 仓库 → Actions →
+#   左侧 build_all → 右上 "···" → Disable workflow。恢复同理。
 
 on:
-  push:
-    branches: [main, master]
-    tags: ['v*']
-  pull_request:
-    branches: [main, master]
   workflow_dispatch:
     inputs:
       targets:
         description: '构建哪些平台'
         type: choice
         options: [android, all]
-        default: android
+        default: 'all'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -110,9 +114,7 @@ jobs:
     name: iOS IPA（免签名）
     runs-on: macos-14
     needs: quality
-    if: >-
-      startsWith(github.ref, 'refs/tags/v') ||
-      (github.event_name == 'workflow_dispatch' && inputs.targets == 'all')
+    if: inputs.targets == 'all'
     steps:
       - uses: actions/checkout@v4
 
@@ -158,9 +160,7 @@ jobs:
     name: macOS APP（免签名）
     runs-on: macos-14
     needs: quality
-    if: >-
-      startsWith(github.ref, 'refs/tags/v') ||
-      (github.event_name == 'workflow_dispatch' && inputs.targets == 'all')
+    if: inputs.targets == 'all'
     steps:
       - uses: actions/checkout@v4
 

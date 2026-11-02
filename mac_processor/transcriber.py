@@ -13,8 +13,14 @@
    在 M4 上单文件吞吐通常能提升 1.5~2.5 倍，且不改变识别结果。
 
 3. **解码参数**
-   `beam_size=1`（贪心）+ `condition_on_previous_text=False`：
-   语音备忘是短句、口语、可能中途换话题，条件解码容易把上一句的幻觉带进下一句。
+   `condition_on_previous_text=False`：语音备忘是短句、口语、可能中途换话题，
+   条件解码容易把上一句的幻觉带进下一句。
+
+4. **为什么要 beam_size=5 和 initial_prompt**
+   贪心解码（beam=1）在长一点的录音上会**丢内容**，而且丢得毫无征兆：
+   同一条 48 秒录音，beam=1 只出 33 个字，beam=5 出 119 个字。
+   提示词写成"转写结果"的样子（而不是指令）还能把"万圣节"从"温盛节"
+   纠正回来。完整实测数据见 `hotwords.py` 的模块文档。
 """
 
 from __future__ import annotations
@@ -28,6 +34,7 @@ from typing import Iterator
 
 from audio_utils import decode_audio, duration_seconds
 from config import Config
+from hotwords import HotwordCache, build_prompt
 
 LOGGER = logging.getLogger("lvs.transcribe")
 
@@ -48,6 +55,30 @@ class WhisperPool:
         self._idle: list[tuple[object, object]] = []
         self._semaphore = threading.BoundedSemaphore(max(1, cfg.whisper_workers))
         self._created = 0
+        self._hotwords = HotwordCache(cfg.sync_root)
+        self._logged_prompt = ""
+
+    # ------------------------------------------------------------- 提示词
+
+    def current_prompt(self) -> str:
+        """当前生效的提示词。
+
+        优先级：手写词表 > 自动收集 > 只有格式前缀。
+        `LVS_WHISPER_HOTWORDS=off` 时连自动收集也关掉。
+        """
+        if self._cfg.hotwords_disabled:
+            terms: list[str] = []
+        else:
+            terms = self._cfg.manual_hotwords() or self._hotwords.get()
+        return build_prompt(self._cfg.whisper_prompt_base, terms)
+
+    def _log_prompt_once(self, prompt: str) -> None:
+        # 只在提示词变化时打日志：它是影响转写质量的关键输入，
+        # 出问题时必须能在日志里看到当时到底喂了什么。
+        if prompt == self._logged_prompt:
+            return
+        self._logged_prompt = prompt
+        LOGGER.info("转写提示词：%s", prompt)
 
     # ------------------------------------------------------------- 生命周期
 
@@ -97,6 +128,8 @@ class WhisperPool:
         # 自己解码成 numpy 再送进去：绕开 faster-whisper 内部与 PyAV 19 的
         # `metadata_errors` 参数不兼容问题（详见 audio_utils.py 的说明）。
         audio = decode_audio(audio_path)
+        prompt = self.current_prompt()
+        self._log_prompt_once(prompt)
 
         with self._borrow() as pipeline:
             segments, info = pipeline.transcribe(  # type: ignore[attr-defined]
@@ -107,6 +140,7 @@ class WhisperPool:
                 vad_filter=True,
                 vad_parameters={"min_silence_duration_ms": 500},
                 condition_on_previous_text=False,
+                initial_prompt=prompt or None,
             )
             pieces: list[str] = []
             count = 0

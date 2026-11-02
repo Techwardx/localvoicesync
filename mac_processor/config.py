@@ -64,6 +64,12 @@ class Config:
     whisper_language: str
     whisper_beam_size: int
 
+    # 提示词格式前缀（"家庭语音备忘。"）。**不能写成指令**，见 hotwords.py。
+    whisper_prompt_base: str
+
+    # "" = 自动从历史 tags/aliases 收集；"off" = 关闭；其他值 = 手动词表（逗号分隔）。
+    whisper_hotwords: str
+
     # ---------------------------------------------------------------- 提炼
     ollama_url: str
     ollama_model: str
@@ -111,7 +117,17 @@ class Config:
             whisper_batch_size=_env_int("LVS_WHISPER_BATCH_SIZE", 8),
             # 留空 = 自动检测语种；固定 "zh" 可以避免中英混说时来回切换。
             whisper_language=_env_str("LVS_WHISPER_LANGUAGE", ""),
-            whisper_beam_size=_env_int("LVS_WHISPER_BEAM_SIZE", 1),
+            # beam_size 1（贪心）改 5：这是本次最大的一个提升。
+            # 实测同一条 48 秒录音，贪心只出 33 个字（丢了约 2/3 内容），
+            # beam 5 出 119 字且带标点。代价是单文件耗时 3.3s → 11s，
+            # 对后台批处理完全可以接受。
+            whisper_beam_size=_env_int("LVS_WHISPER_BEAM_SIZE", 5),
+            # 提示词写成"转写结果"的样子，不要写成指令 —— 指令式会让模型
+            # 把指令当音频内容去转写，实测内容从 85 字掉到 23 字。
+            whisper_prompt_base=_env_str("LVS_WHISPER_PROMPT", "家庭语音备忘。"),
+            # 留空 = 自动收集家庭词汇（来自历史 tags / aliases）；
+            # "off" = 不用词表；其他值 = 手动指定，如 "Sam,QCY T20,保险丝"。
+            whisper_hotwords=_env_str("LVS_WHISPER_HOTWORDS", ""),
             ollama_url=_env_str("LVS_OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/"),
             ollama_model=_env_str("LVS_OLLAMA_MODEL", "qwen3.5:9b-q4_K_M"),
             ollama_timeout=_env_float("LVS_OLLAMA_TIMEOUT", 300.0),
@@ -127,13 +143,39 @@ class Config:
             dry_run=_env_bool("LVS_DRY_RUN", False),
         )
 
+    # ------------------------------------------------------------ 提示词
+
+    @property
+    def hotwords_disabled(self) -> bool:
+        return self.whisper_hotwords.strip().lower() in {"off", "none", "0", "false"}
+
+    def manual_hotwords(self) -> list[str]:
+        """用户手写的词表。空列表表示"没手写"，交给自动收集。"""
+        raw = self.whisper_hotwords.strip()
+        if not raw or self.hotwords_disabled:
+            return []
+        # 中英文逗号都接受，手机/编辑器里两种都常见
+        normalized = raw.replace("，", ",").replace("、", ",")
+        return [term.strip() for term in normalized.split(",") if term.strip()]
+
     def describe(self) -> str:
         return (
             f"同步根目录   {self.sync_root}\n"
             f"状态库       {self.state_db}\n"
             f"缓存目录     {self.cache_dir}\n"
             f"Whisper      {self.whisper_model} / {self.whisper_compute} / "
-            f"{self.whisper_workers} 实例 × {self.whisper_threads} 线程\n"
+            f"{self.whisper_workers} 实例 × {self.whisper_threads} 线程 / "
+            f"beam {self.whisper_beam_size}\n"
+            f"提示词前缀   {self.whisper_prompt_base}\n"
+            f"家庭词汇     "
+            + (
+                "关闭"
+                if self.hotwords_disabled
+                else ("手写 " + "、".join(self.manual_hotwords()))
+                if self.manual_hotwords()
+                else "自动（来自历史 tags/aliases）"
+            )
+            + "\n"
             f"提炼模型     {self.ollama_model} @ {self.ollama_url}\n"
             f"向量模型     {self.embed_model} ({self.embed_dim} 维)\n"
             f"并发度       {self.concurrency}\n"

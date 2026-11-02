@@ -387,6 +387,52 @@ BGE 系中文模型的向量空间是**各向异性**的：无关短句之间本
 模型缺失时 `EmbeddingEngine.start()` 返回 false，搜索页自动退化成纯关键词检索，
 设置页显示原因。**不崩溃、不白屏、不阻断录音。**
 
+### 6. Whisper 的 `initial_prompt` 不是指令，是"上下文"
+
+这条踩过坑，写下来免得再犯。同一条 48 秒录音（large-v3-turbo / int8）实测：
+
+| 配置 | 转写字数 | 「万圣节」 |
+| --- | --- | --- |
+| `beam_size=1` + 无提示词（旧默认） | **33** | 温盛节 ✗ |
+| `beam_size=5` + 无提示词 | 85 | 温盛节 ✗ |
+| `beam_size=5` + 指令式提示词「以下是普通话的句子，请用简体中文转写…」 | **23** | 整段丢掉 |
+| `beam_size=5` + 词表式「家庭语音备忘。常提到：万圣节、要糖、…」 | **119** | 万圣节 ✓ |
+
+三个结论：
+
+1. **`beam_size=1`（贪心）会静默丢内容**，48 秒只出 33 个字，而且不报任何错。
+   默认已改 5。代价是单文件 3.3s → 11s，后台批处理完全能接受。
+2. **提示词必须写成"转写结果"的样子**。写成指令，模型会把指令本身当音频去
+   "转写"，内容掉到 23 个字。这是最反直觉的一条。
+3. **词表不会污染内容**。给一份完全无关的词表（股票、基金、区块链…）去转写
+   同一条录音，122 个字里一个词都没串进来，只是纠正同音字。
+
+词表从哪来：Mac 回传 JSON 里的 `tags` 和 `aliases`——那两个字段本来就是 LLM
+对这个家庭语料的归纳，正是 Whisper 该认识却容易听错的词（`QCY T20`、`AilyPods`、
+`要糖`）。**不需要用户维护词表**，新词出现一次之后就会自动进下一次的提示词。
+
+覆盖方式：
+
+```bash
+LVS_WHISPER_HOTWORDS="Sam,QCY T20,保险丝"   # 手动词表（中英文逗号都行）
+LVS_WHISPER_HOTWORDS=off                    # 关掉词表，只用格式前缀
+LVS_WHISPER_PROMPT="家庭语音备忘。"          # 改格式前缀
+LVS_WHISPER_BEAM_SIZE=1                     # 回退到贪心（更快但会丢内容）
+```
+
+当前生效的提示词可以直接看到——`./run.sh --check` 会把它整行打印出来：
+
+```
+转写提示词          家庭语音备忘。常提到：蓝牙耳机、单耳故障、AilyPods、QCY T20、…
+                    词表 24 个（自动收集）
+```
+
+调完参数想重跑某条旧录音（默认会按内容哈希跳过）：
+
+```bash
+./run.sh --file ~/LocalVoiceSync/Me_Notes/outbox/memo_20261031_212159.m4a --force
+```
+
 ---
 
 ## 四、同步契约
@@ -440,7 +486,7 @@ Mac 端若 Ollama 挂了，会进入**降级模式**：只回传原始转写 + �
 
 ## 五、CI / 出包
 
-`.github/workflows/build_all.yml`，push 到 `main` 或打 `v*` tag 时触发：
+`.github/workflows/build_all.yml`，**只有手动触发**（Actions → build_all → Run workflow）：
 
 | Job | Runner | 产物 | 签名 |
 | --- | --- | --- | --- |
@@ -450,6 +496,11 @@ Mac 端若 Ollama 挂了，会进入**降级模式**：只回传原始转写 + �
 | `macos` | macos-14 | `LocalVoiceSync-*-macos.zip` | 未签名，首次打开需右键「打开」 |
 
 产物在 Actions 页面 Artifacts 区下载，保留 30 天。
+
+> **为什么不再 push 自动触发**：Android 在本地出包更快（几十秒），push 就排队
+> 既占额度又拖慢反馈。iOS 必须用 macOS runner（本地不装 Xcode），到时候在网页上
+> 点一次 Run workflow 并选 `all` 即可，IPA 与 macOS APP 一起产出。
+> 想彻底关掉：仓库 → Actions → 左侧 build_all → "···" → Disable workflow。
 
 换成正式签名需要：
 - Android：`android/key.properties` + keystore，改 `build.gradle.kts` 的 `signingConfig`；

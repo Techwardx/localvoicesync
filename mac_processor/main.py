@@ -236,7 +236,7 @@ class Processor:
 
     # ------------------------------------------------------------- 主流程
 
-    def process(self, path: Path) -> None:
+    def process(self, path: Path, *, force: bool = False) -> None:
         if not path.exists():
             return
 
@@ -251,7 +251,9 @@ class Processor:
             return
 
         digest = sha256_of(path)
-        if self.state.already_done(str(path), digest):
+        # force 只给 --file 用：调完转写参数（比如换提示词、调 beam）之后，
+        # 用户需要能把某条旧录音重新跑一遍看效果，否则只能手工去删状态库。
+        if not force and self.state.already_done(str(path), digest):
             LOGGER.debug("已处理过，跳过：%s", path.name)
             return
 
@@ -442,6 +444,25 @@ def run_check(cfg: Config) -> int:
         print("faster-whisper      ✗  请 pip install faster-whisper")
         ok = False
 
+    # 提示词是影响转写质量的关键输入，自检时必须能直接看到它，
+    # 否则"识别不准"永远只能靠猜。
+    try:
+        from hotwords import build_prompt, collect
+
+        if cfg.hotwords_disabled:
+            terms: list[str] = []
+            source = "已关闭"
+        elif cfg.manual_hotwords():
+            terms = cfg.manual_hotwords()
+            source = "手写"
+        else:
+            terms = collect(cfg.sync_root)
+            source = "自动收集"
+        print(f"转写提示词          {build_prompt(cfg.whisper_prompt_base, terms)}")
+        print(f"                    词表 {len(terms)} 个（{source}）")
+    except Exception as error:  # noqa: BLE001
+        print(f"转写提示词          ✗  {error}")
+
     ollama = OllamaClient(cfg)
     if ollama.health():
         has_model = ollama.has_model()
@@ -492,6 +513,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true", help="只做环境自检")
     parser.add_argument("--once", action="store_true", help="处理完积压后退出")
     parser.add_argument("--file", help="只处理指定文件")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="配合 --file：忽略去重记录，强制重新处理（调完转写参数后重跑用）",
+    )
     parser.add_argument("--dry-run", action="store_true", help="只处理不写文件")
     args = parser.parse_args(argv)
 
@@ -511,7 +537,7 @@ def main(argv: list[str] | None = None) -> int:
         if not target.exists():
             LOGGER.error("文件不存在：%s", target)
             return 2
-        processor.process(target)
+        processor.process(target, force=args.force)
         processor.shutdown()
         return 0
 

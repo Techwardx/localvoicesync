@@ -195,19 +195,33 @@ class _Results extends ConsumerWidget {
   }
 }
 
-class _TagCloud extends ConsumerWidget {
+class _TagCloud extends ConsumerStatefulWidget {
   const _TagCloud({required this.onTapTag});
 
   final ValueChanged<String> onTapTag;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_TagCloud> createState() => _TagCloudState();
+}
+
+class _TagCloudState extends ConsumerState<_TagCloud> {
+  /// 折叠时露几个。
+  ///
+  /// 3 个是个有意的取舍：标签多起来之后，搜索页一进来满屏都是标签，
+  /// 把真正该被看见的输入框挤到上面去了。露最近 3 个足够提示"我最近在记什么"，
+  /// 想看全的再展开——信息没丢，只是不喧宾夺主。
+  static const int _collapsedCount = 3;
+
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
     final tags = ref.watch(tagCountsProvider);
     return tags.when(
       loading: () => const SizedBox.shrink(),
       error: (_, _) => const SizedBox.shrink(),
-      data: (counts) {
-        if (counts.isEmpty) {
+      data: (all) {
+        if (all.isEmpty) {
           return const Center(
             child: Padding(
               padding: EdgeInsets.all(24),
@@ -223,13 +237,19 @@ class _TagCloud extends ConsumerWidget {
             ),
           );
         }
+
+        final visible = _expanded
+            ? all
+            : all.take(_collapsedCount).toList(growable: false);
+        final hidden = all.length - visible.length;
+
         return ListView(
           padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
           children: [
             Padding(
               padding: const EdgeInsets.only(bottom: 10, left: 2),
               child: Text(
-                '标签',
+                '最近用过的标签',
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
@@ -242,41 +262,116 @@ class _TagCloud extends ConsumerWidget {
               spacing: 8,
               runSpacing: 8,
               children: [
-                for (final entry in counts.entries)
-                  InkWell(
-                    borderRadius: BorderRadius.circular(10),
-                    onTap: () => onTapTag(entry.key),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        color: AppTheme.surface,
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: AppTheme.hairline),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            entry.key,
-                            style: const TextStyle(
-                              fontSize: 12.5,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                          const SizedBox(width: 5),
-                          Text('${entry.value}', style: AppTheme.mono),
-                        ],
-                      ),
-                    ),
+                for (final entry in visible)
+                  _TagChip(
+                    label: entry.tag,
+                    count: entry.count,
+                    onTap: () => widget.onTapTag(entry.tag),
+                  ),
+                if (hidden > 0)
+                  _ToggleChip(
+                    label: '展开 $hidden 个',
+                    icon: Icons.expand_more,
+                    onTap: () => setState(() => _expanded = true),
+                  ),
+                if (_expanded && all.length > _collapsedCount)
+                  _ToggleChip(
+                    label: '收起',
+                    icon: Icons.expand_less,
+                    onTap: () => setState(() => _expanded = false),
                   ),
               ],
             ),
           ],
         );
       },
+    );
+  }
+}
+
+/// 单个标签胶囊。
+class _TagChip extends StatelessWidget {
+  const _TagChip({
+    required this.label,
+    required this.count,
+    required this.onTap,
+  });
+
+  final String label;
+  final int count;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(10),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: AppTheme.surface,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: AppTheme.hairline),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              label,
+              style: const TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            const SizedBox(width: 5),
+            Text('$count', style: AppTheme.mono),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 展开/收起。刻意做成虚线感的弱样式，跟真标签区分开——
+/// 它不是一个可以拿去搜索的标签，点它会改变列表本身。
+class _ToggleChip extends StatelessWidget {
+  const _ToggleChip({
+    required this.label,
+    required this.icon,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(10),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: AppTheme.hairline),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 15, color: AppTheme.muted),
+            const SizedBox(width: 3),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 12.5,
+                color: AppTheme.muted,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

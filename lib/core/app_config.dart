@@ -6,7 +6,7 @@ class AppConfig {
 
   /// 展示用的版本号。必须跟 `pubspec.yaml` 的 `version:` 保持一致，
   /// 否则用户报障时说的版本号跟 APK 里实际跑的对不上。
-  static const String appVersion = '0.1.7';
+  static const String appVersion = '0.1.8';
   static const String bundleId = 'com.localvoicesync.app';
 
   // ---------------------------------------------------------------- 目录布局

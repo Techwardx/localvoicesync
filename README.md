@@ -60,6 +60,10 @@ local_voice_sync/
 ├── mac_processor/                    Mac Mini 端 Python 流水线
 │   ├── main.py                       监听 + 调度 + 三步流水线
 │   ├── config.py  transcriber.py  extractor.py  embedder.py
+│   ├── hotwords.py                   自动家庭词表（按成员隔离 + token 预算）
+│   ├── corrector.py                  离线词典纠错（同音专名）
+│   ├── lexicon/                      随仓库分发的词库（THUOCL MIT + custom.txt）
+│   ├── tests/                        Python 单测（unittest，34 条）
 │   ├── audio_utils.py                自己解码音频（绕开 PyAV 版本坑）
 │   ├── state.py                      sha256 去重
 │   ├── writer.py                     原子写 JSON / Markdown
@@ -407,25 +411,105 @@ BGE 系中文模型的向量空间是**各向异性**的：无关短句之间本
 3. **词表不会污染内容**。给一份完全无关的词表（股票、基金、区块链…）去转写
    同一条录音，122 个字里一个词都没串进来，只是纠正同音字。
 
-词表从哪来：Mac 回传 JSON 里的 `tags` 和 `aliases`——那两个字段本来就是 LLM
-对这个家庭语料的归纳，正是 Whisper 该认识却容易听错的词（`QCY T20`、`AilyPods`、
-`要糖`）。**不需要用户维护词表**，新词出现一次之后就会自动进下一次的提示词。
+#### 但词表装不下词典：硬上限 223 token
+
+faster-whisper 的 `get_prompt()` 里写死了
+`previous_tokens[-(448 // 2 - 1):]`——只保留 initial_prompt 的**最后 223 个
+token**，超出的部分被静默丢弃（丢的是**前面**的词）。中文一个 3 字词约
+4~5 token，223 token 只够 **40~50 个词**。实测一个 5,000 词的词库是 33,598
+token，只有末尾 **0.66%** 能进模型。
+
+所以「把词典直接喂给 Whisper」这条路不成立，也不是"提示词写得不够长"的问题：
+
+- Whisper 的 tokenizer 是固定 51,866 词的 byte-level BPE，**任何汉字组合都能
+  编码**。「万圣洁」不是词表里没有，而是解码时在同音字里选错了；
+- faster-whisper 1.2.1 确实有 `hotwords=` 参数，但源码里它就是
+  `tokenizer.encode(" " + hotwords)` 拼进 prompt，没有 logit bias、没有概率
+  加权，同样是 223 token 上限（改成保留前 223）。
+
+词表现在按**真实 Whisper tokenizer 计数**（不是拿字符数硬估——163 个字符
+实际是 202 token，差一点就撑满），预算 180 token，实测当前提示词只占 48 token。
+
+词表从哪来（v0.2 重写，旧版会串场）：
+
+- **按成员隔离**：只扫 `<author>_Notes/inbox`，别人的词汇不进这条录音；
+- **音频笔记 ×3**：粘贴的长文笔记不再主导词表；
+- **时间衰减**：30 天半衰，最近的词优先；
+- **从转写正文挖专名**：jieba 词性标注抓 nr/ns/nz/nt，比 LLM 给的抽象
+  分类标签（"系统测试""社区服务"）靠谱得多；
+- **文字笔记只收两类标签**：日常专名表里的词，和纯英文/数字的名字
+  （`QCY T20`、`AilyPods`、`Sam`）。中英混排的「手语 AI」「3D打印」几乎都是
+  文章主题词，一律不要；
+- **手写 + 自动合并**：旧版 `manual or auto` 是二选一，手写了就丢掉全部自动词。
 
 覆盖方式：
 
 ```bash
-LVS_WHISPER_HOTWORDS="Sam,QCY T20,保险丝"   # 手动词表（中英文逗号都行）
+LVS_WHISPER_HOTWORDS="Sam,QCY T20,保险丝"   # 手动词表，与自动词合并（不是覆盖）
 LVS_WHISPER_HOTWORDS=off                    # 关掉词表，只用格式前缀
 LVS_WHISPER_PROMPT="家庭语音备忘。"          # 改格式前缀
 LVS_WHISPER_BEAM_SIZE=1                     # 回退到贪心（更快但会丢内容）
 ```
 
-当前生效的提示词可以直接看到——`./run.sh --check` 会把它整行打印出来：
+当前生效的提示词和 token 占用可以直接看到——`./run.sh --check` 会打印：
 
 ```
-转写提示词          家庭语音备忘。常提到：蓝牙耳机、单耳故障、AilyPods、QCY T20、…
-                    词表 24 个（自动收集）
+转写提示词          家庭语音备忘。常提到：万圣节、AilyPods、蓝牙耳机、停车、导航、QCY T20。
+                    词表（手写 0 + 自动 12，实际装入 6），48/223 token
+本地词库            ✓  156441 个已知词，309 个高置信专名
 ```
+
+### 7. 转写之后的两层校正：词典管确定性，LLM 管上下文
+
+既然词典进不了提示词，就放到转写**之后**。两层都只对音频生效，
+**文字随手记绝不走**——那是用户亲手打的字，还带 Markdown、英文术语、型号。
+
+**第一层：离线词典（`corrector.py`，确定性、零成本、~10ms）**
+
+词库随仓库分发在 `mac_processor/lexicon/`，见 [lexicon/README.md](mac_processor/lexicon/README.md)：
+
+- `thuocl/`：清华大学开放中文词库（**MIT**，Copyright (c) 2018 THUNLP），
+  11 类共 11.2 万条、2.6MB，带 DF 词频。选它是因为按生活领域分类
+  （饮食 / 汽车 / 地名 / 人名 / 医学 / IT…），比通用大词典更贴近家庭日常记录。
+- `custom.txt`：项目自建的 ~170 条日常专名兜底（节日、家庭称谓、生活场所），
+  补 THUOCL 没有的分类，例如 `万圣节`。
+
+分工很重要，这是踩过坑才定下来的：
+
+- **全量 15.6 万词只用来判断「这个片段是不是一个已知词」**。词库越大，
+  正常口语被误判成生词的概率越低，纠错越安全。
+- **只有高置信专名才允许自动替换**：`custom.txt` + 家庭历史词汇 +
+  THUOCL 里 DF ≥ 10 万的地名/人名/饮食/汽车词。
+
+早期版本把整个 THUOCL 当替换候选，结果它是**名词词库**、不收「显示」这类
+常用动词，把「显示左右的待办事项」改成了「显式左右」，「设置里」被切成
+「置里 → 治理」。改错比不改更伤，所以现在收敛成上面两条。
+
+规则：只处理 2~5 个纯汉字、不在词库里的片段；只接受等长、拼音完全相同
+（无声调，自动覆盖同音不同调）的候选；同音候选分数接近时直接放弃；
+一条转写最多改 4 处；每处都写进 JSON 的 `corrections`，可审计、可回退。
+
+**第二层：本地 Ollama（`extractor.correct_transcript`，~8s）**
+
+词典改不了「听到棉花糖家 → 停到棉花糖家」这种要看上下文的错。这一层把
+转写 + 家庭专名 + 词库检索出的**高置信同音/近音候选**一起交给 LLM。
+
+安全护栏是硬的：长度比必须在 0.9~1.1、相似度 ≥ 0.85、改动字符 ≤ 15%，
+任何一项越界就**整体退回原文**。LLM 校正最大的风险不是改错一个字，
+而是顺手"润色"甚至补内容，所以宁可整条不采纳。
+
+开关：`LVS_LEXICON_CORRECT=0` / `LVS_LLM_CORRECT=0`。
+
+真实效果（`memo_20261031_212159`，48 秒停车场录音）：
+
+| 阶段 | 文本 |
+| --- | --- |
+| Whisper 原始 | `Hello。万圣洁。…近可能往里走…听到棉花糖家,不计。` |
+| 词典层 | `万圣洁 → 万圣节` |
+| LLM 层 | `近可能 → 尽可能`、`听到棉花糖家 → 停到棉花糖家` |
+
+第二次重跑时，因为「万圣节」已经进了词表，**Whisper 自己就转对了**，
+词典层都不用出手。这就是自动词表和纠错层互相喂养的闭环。
 
 调完参数想重跑某条旧录音（默认会按内容哈希跳过）：
 
@@ -455,6 +539,11 @@ Mac 端写入 `inbox/<id>.json`：
   "tags": ["太阳能", "配线", "PowMr"],
   "aliases": ["逆变器", "inverter", "变流器", "保险丝", "fuse"],
   "raw_transcript": "今天检查了太阳能板的配线……",
+  "corrections": [
+    {"from": "万圣洁", "to": "万圣节", "source": "custom"},
+    {"from": "听", "to": "停", "source": "llm"}
+  ],
+  "original_transcript": "今天检查了太阳能板的配线……（Whisper 原始输出，只在改过时才出现）",
   "embedding": [0.012, -0.045, 0.231],
   "embedding_model": "bge-small-zh-v1.5",
   "embedding_dim": 512,
@@ -465,10 +554,17 @@ Mac 端写入 `inbox/<id>.json`：
     "whisper_model": "large-v3-turbo",
     "language": "zh",
     "duration_seconds": 12.4,
-    "llm_model": "qwen3.5:9b-q4_K_M"
+    "llm_model": "qwen3.5:9b-q4_K_M",
+    "correction_count": 2
   }
 }
 ```
+
+**`raw_transcript` 是校正后的最终文本**，手机端一直读这个字段，所以不用重装
+APK 就能看到纠错效果。原始 ASR 输出另存 `original_transcript`（只有真的改过
+才写，避免每条记录多一份全文副本），改动明细在 `corrections` 里，`source`
+取值 `personal` / `custom` / `lexicon` / `llm`。两者都是新增字段，旧客户端
+会直接忽略。
 
 同时写一份人类可读的 `<id>.md`。失败时写 `<id>.error.json`，手机端把记录标成「失败」。
 
@@ -532,6 +628,8 @@ Mac 端若 Ollama 挂了，会进入**降级模式**：只回传原始转写 + �
   建议用「设置 → 诊断 → 检索自检」重新看一眼分布，别再靠猜。
 - Mac 端最多 2 个 Whisper 实例，极端批量会排队；Ollama 自身串行处理请求，
   真正的瓶颈通常是 9B 模型的生成速度。
+- **LLM 二次校正给每条音频多花约 8 秒**（qwen3.5:9b / M4 实测）。嫌慢就
+  `LVS_LLM_CORRECT=0`，词典层仍然生效（它只要 10ms）。
 
 ---
 
@@ -548,10 +646,13 @@ flutter build ios --release --no-codesign
 flutter build macos --release
 
 cd mac_processor
-./run.sh --check                    # 环境自检
+./run.sh --check                    # 环境自检（含提示词 token 占用、词库状态）
 ./run.sh --once                     # 处理完积压就退出（适合 cron）
 ./run.sh --file path/to/memo.m4a    # 单文件调试
 ./run.sh --dry-run                  # 只处理不写文件
+
+# Python 单测（词表预算 / 词典纠错 / LLM 安全护栏，共 34 条）
+.venv/bin/python -m unittest discover -s tests -t . -v
 ```
 
 > 若本机配了 HTTP 代理，`flutter test` 会因为 localhost WebSocket 被代理劫持而失败，

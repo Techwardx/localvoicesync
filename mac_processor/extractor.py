@@ -13,7 +13,8 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Iterable
 
 import requests
 
@@ -60,6 +61,48 @@ USER_TEMPLATE = """作者：{author}
 --- 转写正文结束 ---
 
 请按要求输出 JSON。"""
+
+
+CORRECT_SYSTEM_PROMPT = """你是中文语音识别结果的校对员，服务一个家庭私有语音备忘系统。
+输入是一段语音转写，里面**一定**存在同音字错误，尤其是人名、地名、品牌、节日、型号，
+以及动词搭配（听到 / 停到、近可能 / 尽可能、在 / 再）。
+
+你的任务是把这些明显的错别字改正，其它一律不动。
+
+必须遵守的规则：
+1. 只输出一个 JSON 对象，不要解释、不要 Markdown 代码块，格式为 {"text": "校对后的全文"}。
+2. **不要改写句子、不要调整语序、不要润色、不要删减或补充任何内容。**
+   你只是在同一个句子上换掉几个错字。
+3. 重点找：读音相同或相近、但在这个上下文里明显不成词、或者和上下文矛盾的字。
+   例：「近可能往里走」→「尽可能往里走」；
+       「听到棉花糖家」在通篇讲停车时 → 「停到棉花糖家」；
+       「万圣洁」→「万圣节」。
+4. 拿不准的地方**保持原样**。宁可少改，不可改错。
+5. 参考候选里的词绝大多数是噪音，只有在上下文明确指向它时才采用。
+6. 数字、英文、型号保持原样；口语重复（"人又多，人又多"）保持原样。
+7. 输出长度必须和原文基本一致；如果改完差别很大，说明你改错了，请原样输出。"""
+
+CORRECT_USER_TEMPLATE = """本家庭常见专名（仅供比对，不一定出现在这段录音里）：
+{terms}
+
+词库里与可疑片段同音/近音的候选（噪音居多，仅供参考）：
+{hints}
+
+--- 转写正文开始 ---
+{body}
+--- 转写正文结束 ---
+
+请按要求输出 JSON。"""
+
+
+@dataclass
+class LlmFix:
+    """LLM 校正结果。`applied=False` 表示输出没通过安全校验，已原样退回。"""
+
+    text: str
+    corrections: list[dict[str, str]]
+    applied: bool
+    reason: str = ""
 
 
 class OllamaClient:
@@ -147,6 +190,173 @@ class OllamaClient:
             raise ExtractionError(f"模型输出无法解析为 JSON：{content[:300]}")
 
         return normalize_result(parsed)
+
+    # ------------------------------------------------------------- 二次校正
+
+    def correct_transcript(
+        self,
+        text: str,
+        *,
+        terms: Iterable[str] = (),
+        hints: Iterable[dict[str, Any]] = (),
+    ) -> LlmFix:
+        """让本地 LLM 修上下文相关的同音错字。
+
+        词典层只能改「完全同音的已知专名」，改不了「听到棉花糖家 → 停到
+        棉花糖家」这种需要看上下文的错误。这一层补上，但**输出必须过安全校验**：
+        长度、相似度、改动量任何一项越界就整体退回原文，绝不把 LLM 的
+        自由发挥写进用户记录。
+        """
+        body = text.strip()
+        if not body:
+            return LlmFix(text, [], False, "空文本")
+
+        term_list = [str(t).strip() for t in terms if str(t).strip()][:30]
+        hint_lines: list[str] = []
+        for hint in list(hints)[:8]:
+            fragment = str(hint.get("fragment", "")).strip()
+            candidates = hint.get("candidates") or []
+            if fragment and candidates:
+                joined = "、".join(str(c) for c in candidates[:3])
+                hint_lines.append(f"- {fragment} → {joined}")
+
+        payload = {
+            "model": self._cfg.ollama_model,
+            "stream": False,
+            "format": "json",
+            "think": False,
+            "options": {
+                "temperature": 0.0,
+                "top_p": 0.9,
+                "num_ctx": self._cfg.ollama_num_ctx,
+                "num_predict": min(2048, max(512, len(body) * 2)),
+            },
+            "messages": [
+                {"role": "system", "content": CORRECT_SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": CORRECT_USER_TEMPLATE.format(
+                        terms="、".join(term_list) or "（无）",
+                        hints="\n".join(hint_lines) or "（无）",
+                        body=body,
+                    ),
+                },
+            ],
+        }
+
+        try:
+            response = self._session.post(
+                f"{self._cfg.ollama_url}/api/chat",
+                json=payload,
+                timeout=min(self._cfg.ollama_timeout, 180.0),
+            )
+        except requests.RequestException as error:
+            return LlmFix(text, [], False, f"连接 Ollama 失败：{error}")
+
+        if response.status_code != 200:
+            return LlmFix(text, [], False, f"Ollama 返回 {response.status_code}")
+
+        try:
+            data = response.json()
+        except ValueError:
+            return LlmFix(text, [], False, "Ollama 返回的不是 JSON")
+
+        content = (data.get("message") or {}).get("content", "")
+        parsed = _parse_json_block(content)
+        if not parsed:
+            return LlmFix(text, [], False, "校正输出无法解析")
+
+        corrected = parsed.get("text")
+        if not isinstance(corrected, str):
+            return LlmFix(text, [], False, "校正输出缺少 text 字段")
+        corrected = corrected.strip()
+        if not corrected:
+            return LlmFix(text, [], False, "校正输出为空")
+
+        reason = _unsafe_reason(body, corrected)
+        if reason:
+            return LlmFix(text, [], False, reason)
+        if corrected == body:
+            return LlmFix(text, [], True, "无需修改")
+
+        return LlmFix(corrected, _diff_corrections(body, corrected), True)
+
+
+def _unsafe_reason(original: str, corrected: str) -> str:
+    """LLM 输出是否越界。返回空串表示安全。
+
+    LLM 校正最大的风险不是改错一个字，而是顺手"润色"甚至补内容。
+    三个硬指标一起卡：长度、相似度、改动字符数。
+    """
+    import difflib
+
+    if not 0.9 <= len(corrected) / max(1, len(original)) <= 1.1:
+        return "长度偏差过大"
+    similarity = difflib.SequenceMatcher(
+        None, original, corrected, autojunk=False
+    ).ratio()
+    if similarity < 0.85:
+        return f"相似度过低（{similarity:.2f}）"
+
+    changed = sum(
+        max(i2 - i1, j2 - j1)
+        for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(
+            None, original, corrected, autojunk=False
+        ).get_opcodes()
+        if tag != "equal"
+    )
+    if changed > max(4, int(len(original) * 0.15)):
+        return f"改动过多（{changed} 字）"
+    return ""
+
+
+_PUNCTUATION = frozenset("，。、；：？！“”‘’（）《》—…·,.;:?!\"'()[]{}<>/\\|~`-_\n\r\t ")
+
+
+def _is_punctuation_only(text: str) -> bool:
+    return all(ch in _PUNCTUATION for ch in text)
+
+
+def _diff_corrections(
+    original: str, corrected: str, limit: int = 8
+) -> list[dict[str, str]]:
+    import difflib
+
+    items: list[dict[str, str]] = []
+    matcher = difflib.SequenceMatcher(None, original, corrected, autojunk=False)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        source = original[i1:i2]
+        target = corrected[j1:j2]
+        # 把两端都是标点的字符剥掉，让记录只呈现真正改动的字：
+        # ",近" → "，尽" 记成 "近" → "尽" 才看得懂（注意半角/全角不算相等）。
+        while (
+            source
+            and target
+            and source[0] in _PUNCTUATION
+            and target[0] in _PUNCTUATION
+        ):
+            source, target = source[1:], target[1:]
+        while (
+            source
+            and target
+            and source[-1] in _PUNCTUATION
+            and target[-1] in _PUNCTUATION
+        ):
+            source, target = source[:-1], target[:-1]
+        if not source and not target:
+            continue
+        if source == target:
+            continue
+        # 半角→全角这类纯标点差异不写进改动记录：手机上看得见效果，
+        # 但把它列成"校正"只会淹没真正的错字修正。
+        if _is_punctuation_only(source) and _is_punctuation_only(target):
+            continue
+        items.append({"from": source, "to": target, "source": "llm"})
+        if len(items) >= limit:
+            break
+    return items
 
 
 # ---------------------------------------------------------------- 解析与归一化

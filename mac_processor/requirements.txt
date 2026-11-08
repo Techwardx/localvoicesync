@@ -19,3 +19,10 @@ watchdog>=4.0.0
 requests>=2.31.0
 fastembed>=0.4.2
 python-dotenv>=1.0.1
+
+# 转写校正（corrector.py / hotwords.py）
+#   jieba    从历史转写里挖专名（nr/ns/nz 词性标注）
+#   pypinyin 建同音倒排索引，把「万圣洁」纠成「万圣节」
+# 两者都只在本机跑，不联网；词库文件随仓库分发，见 lexicon/README.md。
+jieba>=0.42.1
+pypinyin>=0.51.0

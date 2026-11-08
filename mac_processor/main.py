@@ -30,13 +30,13 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 
+import corrector
 from config import Config
 from embedder import Embedder
 from extractor import ExtractionError, OllamaClient
 from state import StateStore, sha256_of
 from transcriber import WhisperPool
 from writer import write_error, write_result
-
 try:
     from watchdog.events import FileSystemEvent, FileSystemEventHandler
     from watchdog.observers import Observer
@@ -289,6 +289,44 @@ class Processor:
         write_result(job.inbox_dir, job.memo_id, payload)
         self.state.mark(str(path), digest, "ok", f"{elapsed:.1f}s")
 
+    def _correct(
+        self, job: Job, transcript: str
+    ) -> tuple[str, list[dict[str, str]]]:
+        """转写后的两层校正：本地词库（确定性）+ 本地 LLM（上下文）。
+
+        任何一层失败都只是少改几处，绝不能让整条记录处理失败。
+        """
+        text = transcript
+        corrections: list[dict[str, str]] = []
+        vocabulary = self.pool.vocabulary(job.author, limit=200)
+
+        if self.cfg.lexicon_correct:
+            try:
+                result = corrector.correct(text, personal_terms=vocabulary)
+                if result.changed:
+                    text = result.text
+                    corrections.extend(result.as_dicts())
+                    LOGGER.info("词典纠错 %d 处", len(result.corrections))
+            except Exception as error:  # noqa: BLE001
+                LOGGER.warning("词典纠错跳过：%s", error)
+
+        if self.cfg.llm_correct:
+            try:
+                hints = corrector.collect_hints(text, personal_terms=vocabulary)
+                fix = self.ollama.correct_transcript(
+                    text, terms=vocabulary, hints=hints
+                )
+                if fix.applied and fix.corrections:
+                    text = fix.text
+                    corrections.extend(fix.corrections)
+                    LOGGER.info("LLM 校正 %d 处", len(fix.corrections))
+                elif not fix.applied and fix.reason != "无需修改":
+                    LOGGER.warning("LLM 校正未采用：%s", fix.reason)
+            except Exception as error:  # noqa: BLE001
+                LOGGER.warning("LLM 校正跳过：%s", error)
+
+        return text, corrections
+
     def _build_payload(self, job: Job, path: Path) -> tuple[dict, bool]:
         transcript = ""
         language = ""
@@ -296,7 +334,7 @@ class Processor:
         segments = 0
 
         if job.kind == "audio":
-            result = self.pool.transcribe(path)
+            result = self.pool.transcribe(path, author=job.author)
             transcript = result.text
             language = result.language
             duration = result.duration
@@ -313,6 +351,13 @@ class Processor:
 
         if not transcript:
             raise ExtractionError("转写结果为空，无法提炼")
+
+        # 校正只对音频生效。文字随手记是用户亲手打的字（还有 Markdown、
+        # 英文术语、型号），任何自动纠错都只会帮倒忙。
+        original_transcript = transcript
+        corrections: list[dict[str, str]] = []
+        if job.kind == "audio":
+            transcript, corrections = self._correct(job, transcript)
 
         # 提炼失败不阻断流程：用户至少还能拿到原始转写。
         degraded = False
@@ -356,7 +401,11 @@ class Processor:
             "todos": extracted.get("todos", []),
             "tags": extracted.get("tags", []),
             "aliases": extracted.get("aliases", []),
+            # raw_transcript 放**校正后**的最终文本：手机端一直读这个字段，
+            # 这样不用重装 APK 就能看到纠错效果。原始 ASR 结果另存
+            # original_transcript，任何改动都能追溯、能回退。
             "raw_transcript": transcript,
+            "corrections": corrections,
             "embedding": vector or [],
             "embedding_model": self.embedder.model_id if vector else None,
             "embedding_dim": len(vector) if vector else None,
@@ -369,8 +418,12 @@ class Processor:
                 "duration_seconds": round(duration, 2),
                 "segment_count": segments,
                 "llm_model": None if degraded else self.cfg.ollama_model,
+                "correction_count": len(corrections),
             },
         }
+        # 只有真的改过才存原始文本，避免每条记录都多一份全文副本。
+        if original_transcript != transcript:
+            payload["original_transcript"] = original_transcript
         return payload, degraded
 
 
@@ -445,23 +498,43 @@ def run_check(cfg: Config) -> int:
         ok = False
 
     # 提示词是影响转写质量的关键输入，自检时必须能直接看到它，
-    # 否则"识别不准"永远只能靠猜。
+    # 否则"识别不准"永远只能靠猜。同时显示真实 token 占用，
+    # 因为 Whisper 只保留最后 223 个 token，超了会静默丢掉前面的词。
     try:
-        from hotwords import build_prompt, collect
+        from hotwords import build_prompt, collect, make_token_cost, merge_terms
 
-        if cfg.hotwords_disabled:
-            terms: list[str] = []
-            source = "已关闭"
-        elif cfg.manual_hotwords():
-            terms = cfg.manual_hotwords()
-            source = "手写"
-        else:
-            terms = collect(cfg.sync_root)
-            source = "自动收集"
-        print(f"转写提示词          {build_prompt(cfg.whisper_prompt_base, terms)}")
-        print(f"                    词表 {len(terms)} 个（{source}）")
+        manual = cfg.manual_hotwords()
+        auto = [] if cfg.hotwords_disabled else collect(cfg.sync_root)
+        terms = merge_terms(manual, auto)
+        token_cost = make_token_cost(cfg.cache_dir)
+        prompt = build_prompt(cfg.whisper_prompt_base, terms, token_cost=token_cost)
+        used = token_cost(prompt) if token_cost else None
+        source = (
+            "已关闭"
+            if cfg.hotwords_disabled
+            else f"手写 {len(manual)} + 自动 {len(auto)}，实际装入 {len(terms)}"
+        )
+        print(f"转写提示词          {prompt}")
+        print(
+            f"                    词表（{source}）"
+            + (f"，{used}/223 token" if used is not None else "，tokenizer 未加载")
+        )
     except Exception as error:  # noqa: BLE001
         print(f"转写提示词          ✗  {error}")
+
+    try:
+        import corrector
+
+        lexicon = corrector.get_lexicon()
+        if lexicon is None:
+            print("本地词库            ✗  未加载（检查 pypinyin 与 lexicon/ 目录）")
+        else:
+            print(
+                f"本地词库            ✓  {len(lexicon.words)} 个已知词，"
+                f"{len(lexicon._priority)} 个高置信专名"
+            )
+    except Exception as error:  # noqa: BLE001
+        print(f"本地词库            ✗  {error}")
 
     ollama = OllamaClient(cfg)
     if ollama.health():

@@ -55,6 +55,9 @@ class Config:
     cache_dir: Path
     """模型缓存目录（Whisper / fastembed 都会往这里写）。"""
 
+    lexicon_dir: Path
+    """随仓库分发的离线词库目录（THUOCL + custom.txt）。"""
+
     # ---------------------------------------------------------------- 转写
     whisper_model: str
     whisper_compute: str
@@ -69,6 +72,10 @@ class Config:
 
     # "" = 自动从历史 tags/aliases 收集；"off" = 关闭；其他值 = 手动词表（逗号分隔）。
     whisper_hotwords: str
+
+    # 转写之后的两层校正（都只对音频生效，文字随手记绝不碰）。
+    lexicon_correct: bool
+    llm_correct: bool
 
     # ---------------------------------------------------------------- 提炼
     ollama_url: str
@@ -104,6 +111,12 @@ class Config:
             sync_root=root,
             state_db=state,
             cache_dir=cache,
+            lexicon_dir=Path(
+                _env_str(
+                    "LVS_LEXICON_DIR",
+                    str(Path(__file__).resolve().parent / "lexicon"),
+                )
+            ).expanduser(),
             # large-v3-turbo：turbo 版在中文上几乎不掉点，速度却快 4~5 倍，
             # 是本地批量转写的性价比最优解。
             whisper_model=_env_str("LVS_WHISPER_MODEL", "large-v3-turbo"),
@@ -128,6 +141,12 @@ class Config:
             # 留空 = 自动收集家庭词汇（来自历史 tags / aliases）；
             # "off" = 不用词表；其他值 = 手动指定，如 "Sam,QCY T20,保险丝"。
             whisper_hotwords=_env_str("LVS_WHISPER_HOTWORDS", ""),
+            # 词典纠错：用随仓库分发的离线词库修正同音专名（万圣洁 → 万圣节）。
+            # 只对音频生效，宁可不改不可改错，详见 corrector.py。
+            lexicon_correct=_env_bool("LVS_LEXICON_CORRECT", True),
+            # LLM 二次校正：把转写 + 专名提示交给本地 Ollama 修上下文错字
+            # （听到棉花糖家 → 停到棉花糖家）。多一次本地调用，几秒。
+            llm_correct=_env_bool("LVS_LLM_CORRECT", True),
             ollama_url=_env_str("LVS_OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/"),
             ollama_model=_env_str("LVS_OLLAMA_MODEL", "qwen3.5:9b-q4_K_M"),
             ollama_timeout=_env_float("LVS_OLLAMA_TIMEOUT", 300.0),
@@ -173,9 +192,12 @@ class Config:
                 if self.hotwords_disabled
                 else ("手写 " + "、".join(self.manual_hotwords()))
                 if self.manual_hotwords()
-                else "自动（来自历史 tags/aliases）"
+                else "自动（来自历史 tags/aliases/专名）"
             )
             + "\n"
+            f"转写校正     词典{'开' if self.lexicon_correct else '关'}"
+            f" / LLM{'开' if self.llm_correct else '关'}\n"
+            f"词库目录     {self.lexicon_dir}\n"
             f"提炼模型     {self.ollama_model} @ {self.ollama_url}\n"
             f"向量模型     {self.embed_model} ({self.embed_dim} 维)\n"
             f"并发度       {self.concurrency}\n"

@@ -64,9 +64,16 @@ def render_markdown(payload: dict[str, Any]) -> str:
 
     transcript = (payload.get("raw_transcript") or "").strip()
     if transcript:
-        lines.append("## 原始转写")
+        lines.append("## 转写全文")
         lines.append("")
         lines.append(transcript)
+        lines.append("")
+
+    original = (payload.get("original_transcript") or "").strip()
+    if original and original != transcript:
+        lines.append("## 原始转写（Whisper）")
+        lines.append("")
+        lines.append(original)
         lines.append("")
 
     lines.append("---")

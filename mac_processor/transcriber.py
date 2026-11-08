@@ -34,7 +34,7 @@ from typing import Iterator
 
 from audio_utils import decode_audio, duration_seconds
 from config import Config
-from hotwords import HotwordCache, build_prompt
+from hotwords import HotwordCache, build_prompt, make_token_cost, merge_terms
 
 LOGGER = logging.getLogger("lvs.transcribe")
 
@@ -56,21 +56,35 @@ class WhisperPool:
         self._semaphore = threading.BoundedSemaphore(max(1, cfg.whisper_workers))
         self._created = 0
         self._hotwords = HotwordCache(cfg.sync_root)
+        # 用真实 Whisper tokenizer 数 token，而不是拿字符数硬估；
+        # 模型还没下载时自动退回保守估算。
+        self._token_cost = make_token_cost(cfg.cache_dir)
         self._logged_prompt = ""
 
     # ------------------------------------------------------------- 提示词
 
-    def current_prompt(self) -> str:
-        """当前生效的提示词。
+    def current_prompt(self, author: str | None = None) -> str:
+        """当前这位成员生效的提示词。
 
-        优先级：手写词表 > 自动收集 > 只有格式前缀。
+        v0.2：手写词与自动词**合并**（旧版是二选一，手写了就丢掉全部自动词）；
+        自动词按成员隔离，别人的词汇不会串进这条录音。
         `LVS_WHISPER_HOTWORDS=off` 时连自动收集也关掉。
         """
         if self._cfg.hotwords_disabled:
             terms: list[str] = []
         else:
-            terms = self._cfg.manual_hotwords() or self._hotwords.get()
-        return build_prompt(self._cfg.whisper_prompt_base, terms)
+            terms = merge_terms(
+                self._cfg.manual_hotwords(), self._hotwords.get(author)
+            )
+        return build_prompt(
+            self._cfg.whisper_prompt_base, terms, token_cost=self._token_cost
+        )
+
+    def vocabulary(self, author: str | None = None, limit: int = 200) -> list[str]:
+        """给纠错层用的家庭专名（比提示词那份更长，两者共用一次扫描）。"""
+        if self._cfg.hotwords_disabled:
+            return []
+        return merge_terms(self._cfg.manual_hotwords(), self._hotwords.get(author, max_terms=limit))
 
     def _log_prompt_once(self, prompt: str) -> None:
         # 只在提示词变化时打日志：它是影响转写质量的关键输入，
@@ -78,7 +92,12 @@ class WhisperPool:
         if prompt == self._logged_prompt:
             return
         self._logged_prompt = prompt
-        LOGGER.info("转写提示词：%s", prompt)
+        if self._token_cost:
+            LOGGER.info(
+                "转写提示词（%d/223 token）：%s", self._token_cost(prompt), prompt
+            )
+        else:
+            LOGGER.info("转写提示词（tokenizer 未加载，按字符估算）：%s", prompt)
 
     # ------------------------------------------------------------- 生命周期
 
@@ -124,11 +143,11 @@ class WhisperPool:
 
     # ------------------------------------------------------------- 转写
 
-    def transcribe(self, audio_path: Path) -> Transcript:
+    def transcribe(self, audio_path: Path, *, author: str | None = None) -> Transcript:
         # 自己解码成 numpy 再送进去：绕开 faster-whisper 内部与 PyAV 19 的
         # `metadata_errors` 参数不兼容问题（详见 audio_utils.py 的说明）。
         audio = decode_audio(audio_path)
-        prompt = self.current_prompt()
+        prompt = self.current_prompt(author or author_from_path(audio_path))
         self._log_prompt_once(prompt)
 
         with self._borrow() as pipeline:
@@ -169,3 +188,15 @@ def _looks_cjk(pieces: list[str]) -> bool:
     sample = "".join(pieces)[:200]
     cjk = sum(1 for ch in sample if "\u4e00" <= ch <= "\u9fff")
     return cjk > len(sample) * 0.2
+
+
+def author_from_path(path: Path) -> str | None:
+    """从 `.../<成员>_Notes/outbox/memo_*.m4a` 里取出成员名。"""
+    parts = path.parts
+    if "outbox" not in parts:
+        return None
+    index = parts.index("outbox")
+    if index == 0:
+        return None
+    name = parts[index - 1]
+    return name[: -len("_Notes")] if name.endswith("_Notes") else name

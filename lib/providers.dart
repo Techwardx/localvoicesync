@@ -8,6 +8,7 @@ import 'core/family_member.dart';
 import 'models/memo.dart';
 import 'models/search_hit.dart';
 import 'models/sync_status.dart';
+import 'models/todo.dart';
 import 'services/search_service.dart';
 import 'services/settings_store.dart';
 import 'services/services.dart';
@@ -236,8 +237,18 @@ class MemoListNotifier extends AsyncNotifier<List<Memo>> {
 
   Future<void> toggleTodo(String memoId, int index, bool completed) async {
     final services = ref.read(servicesProvider);
-    await services.database.setTodoCompleted(memoId, index, completed);
+    final memo = await services.database.memoById(memoId);
+    if (memo == null || index < 0 || index >= memo.todos.length) return;
+    // 详情页和待办页必须走同一条写入路径，否则勾选只留在本机 SQLite，
+    // 永远同步不到 Mac / 别的手机。
+    await services.todos.setNoteTodoCompleted(
+      memoId: memoId,
+      index: index,
+      task: memo.todos[index].task,
+      completed: completed,
+    );
     await refresh();
+    ref.invalidate(todoListProvider);
   }
 
   Future<void> remove(String memoId) async {
@@ -249,6 +260,119 @@ class MemoListNotifier extends AsyncNotifier<List<Memo>> {
   Future<Memo?> byId(String memoId) async {
     final services = ref.read(servicesProvider);
     return services.database.memoById(memoId);
+  }
+}
+
+// ------------------------------------------------------------------ 待办页面
+
+/// 待办页面的唯一数据源：所有笔记里的 TODO + 手工新增的 TODO。
+///
+/// 两条刷新路径缺一不可：
+/// * `ref.watch(memoListProvider)` —— Mac 回了新的笔记 JSON，待办要跟着长出来；
+/// * 12 秒轮询 —— 别的手机勾掉一条待办**不会产生新笔记**，
+///   只改 `todos/*.json`，memoList 完全不会动，必须独立去读状态文件。
+final todoListProvider =
+    AsyncNotifierProvider<TodoNotifier, List<TodoEntry>>(TodoNotifier.new);
+
+class TodoNotifier extends AsyncNotifier<List<TodoEntry>> {
+  Timer? _timer;
+  bool _disposed = false;
+  bool _busy = false;
+
+  @override
+  Future<List<TodoEntry>> build() async {
+    ref.onDispose(() {
+      _disposed = true;
+      _timer?.cancel();
+      _timer = null;
+    });
+    ref.watch(memoListProvider);
+    // build 可能因依赖变化重跑，先把旧定时器收掉，别越攒越多。
+    _timer?.cancel();
+    _timer = Timer.periodic(
+      AppConfig.todoStatePollInterval,
+      (_) => unawaited(refresh()),
+    );
+    return ref.read(servicesProvider).todos.load();
+  }
+
+  Future<void> refresh() async {
+    if (_busy || _disposed) return;
+    _busy = true;
+    try {
+      final entries = await ref.read(servicesProvider).todos.load();
+      if (!_disposed) state = AsyncData(entries);
+    } on Object catch (error) {
+      AppLog.w('todo', '刷新待办失败：$error');
+    } finally {
+      _busy = false;
+    }
+  }
+
+  /// 回到前台 / 下拉刷新：连对账一起做，把跨设备的勾选落实进本地库。
+  Future<void> reconcile() async {
+    try {
+      await ref.read(servicesProvider).todos.reconcile();
+    } on Object catch (error) {
+      AppLog.w('todo', '待办对账失败：$error');
+    }
+    await refresh();
+  }
+
+  Future<void> add(String task) async {
+    final services = ref.read(servicesProvider);
+    final settings = ref.read(settingsProvider);
+    try {
+      await services.todos.addManual(task, author: settings.member.author);
+    } on Object catch (error) {
+      ref.read(lastErrorProvider.notifier).set('待办添加失败：$error');
+      AppLog.e('todo', '新增待办失败：$error');
+      return;
+    }
+    await refresh();
+  }
+
+  Future<void> toggle(TodoEntry entry, bool completed) async {
+    final services = ref.read(servicesProvider);
+    // 乐观更新：勾选必须"点了就变"，等文件读写回来再变会有明显迟滞。
+    final current = state.asData?.value ?? const <TodoEntry>[];
+    state = AsyncData(<TodoEntry>[
+      for (final item in current)
+        item.id == entry.id ? item.copyWith(completed: completed) : item,
+    ]);
+    try {
+      if (entry.fromNote) {
+        await services.todos.setNoteTodoCompleted(
+          memoId: entry.memoId!,
+          index: entry.memoIndex,
+          task: entry.task,
+          completed: completed,
+        );
+      } else {
+        await services.todos.setManualCompleted(entry.id, completed);
+      }
+    } on Object catch (error) {
+      ref.read(lastErrorProvider.notifier).set('待办状态保存失败：$error');
+      AppLog.e('todo', '待办状态保存失败：$error');
+    }
+    // 详情页读的是 memos 表，笔记待办变更要让它一起失效。
+    if (entry.fromNote) ref.invalidate(memoListProvider);
+    await refresh();
+  }
+
+  Future<void> remove(TodoEntry entry) async {
+    if (!entry.fromManual) return;
+    final services = ref.read(servicesProvider);
+    final current = state.asData?.value ?? const <TodoEntry>[];
+    state = AsyncData(
+      current.where((item) => item.id != entry.id).toList(growable: false),
+    );
+    try {
+      await services.todos.deleteManual(entry.id);
+    } on Object catch (error) {
+      AppLog.e('todo', '删除待办失败：$error');
+    }
+    await refresh();
   }
 }
 

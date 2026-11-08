@@ -14,6 +14,7 @@
     python main.py --check              # 只做环境自检
     python main.py --once               # 处理完积压就退出（适合 cron）
     python main.py --file a.m4a         # 处理单个文件（调试用）
+    python main.py --todos              # 汇总所有笔记待办 + 手机同步过来的勾选状态
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ from extractor import ExtractionError, OllamaClient
 from state import StateStore, sha256_of
 from tag_cleanup import normalize_existing_notes, print_report
 from tag_registry import TagRegistry
+from todo_state import format_report, state_stats
 from transcriber import WhisperPool
 from writer import write_error, write_result
 try:
@@ -577,6 +579,11 @@ def run_check(cfg: Config) -> int:
     except Exception as error:  # noqa: BLE001
         print(f"标签词表            ✗  {error}")
 
+    try:
+        print(f"待办状态            ✓  {state_stats(cfg.sync_root)}")
+    except Exception as error:  # noqa: BLE001
+        print(f"待办状态            ✗  {error}")
+
     ollama = OllamaClient(cfg)
     if ollama.health():
         has_model = ollama.has_model()
@@ -625,6 +632,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--sync-root", help="覆盖同步根目录")
     parser.add_argument("--check", action="store_true", help="只做环境自检")
+    parser.add_argument(
+        "--todos",
+        action="store_true",
+        help="汇总所有笔记待办与手机同步过来的完成状态（只读，不改文件）",
+    )
     parser.add_argument("--once", action="store_true", help="处理完积压后退出")
     parser.add_argument("--file", help="只处理指定文件")
     parser.add_argument(
@@ -655,6 +667,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.check:
         return run_check(cfg)
+
+    if args.todos:
+        print(format_report(cfg.sync_root))
+        return 0
 
     if args.normalize_tags:
         report = normalize_existing_notes(

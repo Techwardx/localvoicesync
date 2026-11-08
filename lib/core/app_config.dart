@@ -6,7 +6,7 @@ class AppConfig {
 
   /// 展示用的版本号。必须跟 `pubspec.yaml` 的 `version:` 保持一致，
   /// 否则用户报障时说的版本号跟 APK 里实际跑的对不上。
-  static const String appVersion = '0.1.8';
+  static const String appVersion = '0.1.9';
   static const String bundleId = 'com.localvoicesync.app';
 
   // ---------------------------------------------------------------- 目录布局
@@ -32,6 +32,20 @@ class AppConfig {
 
   static const String outboxDirName = 'outbox';
   static const String inboxDirName = 'inbox';
+
+  /// 待办状态目录。每台设备一个 `<deviceId>.json`，**只写自己那份**。
+  ///
+  /// 为什么不共用一个 `todos.json`：两台手机同时勾待办会写同一个文件，
+  /// Syncthing 只能留一份再生成 `*.sync-conflict-*`，用户就得手工合并。
+  /// 一设备一文件 → 永远只有一个写入者 → 正常路径下不存在冲突。
+  static const String todoStateDirName = 'todos';
+
+  /// 待办页面重读状态文件的节奏。
+  ///
+  /// 别的手机勾掉一条待办不会产生新的笔记 JSON，所以 `memoListProvider`
+  /// 不会动；必须有一条独立的轮询才能把跨设备的改动拉过来。
+  /// 文件很小（几 KB），12 秒一次在手机上几乎无感。
+  static const Duration todoStatePollInterval = Duration(seconds: 12);
 
   /// 录音过程中的临时目录。Syncthing 通过 `.stignore` 忽略它，
   /// 保证半截文件永远不会离开这台手机。

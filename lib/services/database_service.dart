@@ -338,6 +338,26 @@ class DatabaseService {
     return updated;
   }
 
+  /// 一次性写回某条笔记的全部 TODO 状态。
+  ///
+  /// 待办页面做「跨设备状态对账」时用：别的手机勾掉的待办会通过
+  /// `todos/*.json` 传过来，这里把它落实进本地库，详情页才不会显示旧状态。
+  Future<Memo?> setTodos(String memoId, List<TodoItem> todos) async {
+    final memo = await memoById(memoId);
+    if (memo == null) return null;
+    if (memo.todos.length == todos.length &&
+        List.generate(
+          todos.length,
+          (i) => memo.todos[i].task == todos[i].task &&
+              memo.todos[i].completed == todos[i].completed,
+        ).every((same) => same)) {
+      return memo;
+    }
+    final updated = memo.copyWith(todos: todos, updatedAt: DateTime.now());
+    await upsertMemo(updated);
+    return updated;
+  }
+
   /// 标记处理失败（Mac 端回了 error 或本地解析异常时使用）。
   Future<void> markFailed(String memoId, {String? reason}) async {
     final memo = await memoById(memoId);
@@ -411,6 +431,13 @@ class DatabaseService {
       orderBy: 'created_at DESC',
       limit: limit,
     );
+    return rows.map(Memo.fromRow).toList(growable: false);
+  }
+
+  /// 取全部记录（待办页面要汇总**所有**笔记里的 TODO，不能只取最近 50 条）。
+  Future<List<Memo>> allMemos() async {
+    final db = await database;
+    final rows = await db.query('memos', orderBy: 'created_at DESC');
     return rows.map(Memo.fromRow).toList(growable: false);
   }
 

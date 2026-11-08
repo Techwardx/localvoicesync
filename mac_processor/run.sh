@@ -4,6 +4,7 @@
 #
 #   ./run.sh            常驻监听
 #   ./run.sh --check    环境自检
+#   ./run.sh --todos    汇总所有笔记待办 + 手机同步过来的勾选状态（只读）
 #   ./run.sh --once     处理完积压就退出
 #
 set -euo pipefail

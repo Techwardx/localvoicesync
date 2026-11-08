@@ -317,7 +317,13 @@ class InboxWatcherService {
           .list()
           .where((e) => e is Directory)
           .cast<Directory>()
-          .where((dir) => !p.basename(dir.path).startsWith('.'))
+          // `todos/` 是共享的待办状态目录，不是成员目录；
+          // 不排除的话诊断报告里会冒出一行假的「todos/inbox 不存在」。
+          .where(
+            (dir) =>
+                !p.basename(dir.path).startsWith('.') &&
+                p.basename(dir.path) != AppConfig.todoStateDirName,
+          )
           .toList();
       if (members.isEmpty) {
         lines.add('同步根下没有任何成员目录');

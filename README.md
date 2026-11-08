@@ -35,6 +35,7 @@ local_voice_sync/
 │   │   └── family_member.dart        家庭成员 → 作者标签 → 同步目录
 │   ├── models/
 │   │   ├── memo.dart                 记录模型（SQLite 行 ↔ 同步契约 JSON）
+│   │   ├── todo.dart                 待办状态：稳定 key / 合并 / 分组（纯 Dart）
 │   │   ├── search_hit.dart
 │   │   └── sync_status.dart
 │   ├── services/
@@ -48,11 +49,12 @@ local_voice_sync/
 │   │   ├── embedding_isolate.dart        主 Isolate 侧封装
 │   │   ├── search_service.dart           混合检索 + RRF 融合
 │   │   ├── inbox_watcher_service.dart    解析 Mac 回传 JSON 入库
+│   │   ├── todo_service.dart             待办状态文件读写 + 跨设备对账
 │   │   ├── syncthing_service.dart        Syncthing REST 探测
 │   │   ├── settings_store.dart
 │   │   ├── foreground_service.dart       Android 前台服务桥
 │   │   └── services.dart                 冷启动编排（boot）
-│   ├── views/                        root_shell / home / search / detail / settings
+│   ├── views/                        root_shell / home / todo / search / detail / settings
 │   └── widgets/                      status_light / record_button / memo_card / todo_list
 ├── assets/models/                    向量模型（不进 git，用脚本下载）
 ├── tool/fetch_embedding_model.sh
@@ -64,8 +66,9 @@ local_voice_sync/
 │   ├── corrector.py                  离线词典纠错（同音专名）
 │   ├── tag_registry.py               现有标签词表 + 确定性归类
 │   ├── tag_cleanup.py                一次性整理已有标签（备份 / 预览 / 写回）
+│   ├── todo_state.py                 待办状态只读汇总（供给 --todos / --check）
 │   ├── lexicon/                      随仓库分发的词库（THUOCL MIT + custom.txt）
-│   ├── tests/                        Python 单测（unittest，62 条）
+│   ├── tests/                        Python 单测（unittest，75 条）
 │   ├── audio_utils.py                自己解码音频（绕开 PyAV 版本坑）
 │   ├── state.py                      sha256 去重
 │   ├── writer.py                     原子写 JSON / Markdown
@@ -86,6 +89,9 @@ local_voice_sync/
 │   ├── outbox/              ← 手机 → Mac
 │   └── inbox/               ← Mac → 手机
 ├── Dad_Notes/  Mom_Notes/  <自定义>_Notes/
+├── todos/                       ← 待办勾选状态 + 手工待办（每台设备各写一份）
+│   ├── <deviceId-A>.json        ← 手机 A 写且只写这一份
+│   └── <deviceId-B>.json        ← 手机 B 写且只写这一份；Mac 只读不写
 
 # 私有区（iOS/macOS 在 <Documents> 下，Android 在 /data/user/0/<pkg>/app_flutter）
 LocalVoiceSyncLocal/
@@ -108,6 +114,10 @@ LocalVoiceSyncLocal/
 > 两台设备各自持有一个 SQLite 文件、由 Syncthing 双向覆盖，是最经典的
 > "数据库被撕裂"事故。同步目录里只放**只增不改的文件**（音频、JSON、Markdown），
 > 数据库永远留在本机。
+>
+> 待办状态是唯一需要**多设备共同修改**的数据，所以也不能用一个共享文件让两台手机
+> 对着写（那会生成 `.sync-conflict-*` 副本）。做法是每台设备只写自己那一份
+> `todos/<deviceId>.json`，其余设备只读、按时间戳合并——详见第三节第 9 条。
 
 ---
 
@@ -122,6 +132,11 @@ flutter run -d <device>
 ```
 
 首次启动后到「设置 → 成员」选一下这是谁的手机。
+
+底部导航共四页：**首页**（录音 / 随手记 / 记录列表）、**待办**、**搜索**、**设置**。
+「待办」是独立页面，把**所有笔记里提炼出的待办**汇总到一处，也能脱离笔记单独新建；
+已完成的默认折叠在未完成列表下方，点一下标题栏展开。
+勾选状态和手工待办会通过 `todos/` 目录与 Mac、其他手机同步（见第三节第 9 条）。
 
 > 国内网络下载模型慢：`HF_ENDPOINT=https://hf-mirror.com ./tool/fetch_embedding_model.sh`
 
@@ -211,6 +226,7 @@ flutter config --android-sdk "$HOME/Android/sdk"
 cd mac_processor
 cp .env.example .env                     # 改 LVS_SYNC_ROOT 为 Syncthing 文件夹的真实路径
 ./run.sh --check                         # 环境自检
+./run.sh --todos                         # 汇总所有笔记待办 + 手机同步过来的勾选（只读）
 ./run.sh                                 # 常驻监听
 ```
 
@@ -272,6 +288,9 @@ cd mac_processor
   最近一次扫描看到/入库了多少、上次错误是什么，
   以及**本机数据库共几条 / 待处理几条**和一段数据库自检
   （schema 版本、`memos` 的实际列、FTS5 是否可用、按状态分组计数）。
+  末尾还有「— 待办状态 —」：本机的 `deviceId`、自己那份状态文件路径、
+  目录里读到了几份设备文件、合并后多少条勾选 / 多少条手工待办。
+  勾选在别的手机上没同步过来时，先看这一段。
 
   > 最后这些数字是用来区分几种"看不到"的：
   > 文件在、库里 0 条 → 解析或入库失败；
@@ -562,6 +581,76 @@ LLM 只负责**提建议**，代码逐字段校验：组成员必须是真实存
 `./run.sh --check` 会打印当前词表规模。开关：`LVS_TAG_MERGE=0`（回到旧行为）、
 `LVS_TAG_MAX_NEW=2`。
 
+### 9. 待办状态：每台设备只写自己的那份文件
+
+「待办」页要汇总**所有笔记**里的 `todos`，还要能脱离笔记手工新建，
+并且勾选状态得让 Mac 和别的手机看见。这里没有动 JSON 契约，也不需要数据库迁移：
+
+- **笔记待办本来就在契约里**：Mac 端 `extractor.py` 提炼、`writer.py` 写进
+  `inbox/<id>.json` 的 `todos[]`，手机入库后存在 `memos.todos`，
+  详情页的 `TodoList` 早就能勾。缺的只是「汇总」和「把勾同步出去」。
+- **不改 `inbox/*.json`**：那些是 Mac 单向产出的只增文件。让手机去回写，
+  等于和 Mac 抢同一个文件的写权，重跑一次提炼就把勾选冲掉了。
+- **不建一张共享 `todos.json`**：两台手机同时勾，Syncthing 会生成
+  `.sync-conflict-*`，用户得手工挑哪份对。
+
+所以改成**每台设备一个写者**：
+
+```
+<同步根>/todos/<deviceId>.json     ← 该手机写且只写这一份
+```
+
+所有设备（含 Mac）读**全部**状态文件，按 `updated_at` 做 last-write-wins 合并；
+`.sync-conflict-*` 和 `.part` 直接跳过，坏 JSON 跳过而不是让整页崩掉。
+文件按 `AtomicIo` 的 `.part → rename` 写，避免读到半截内容。
+
+```json
+{
+  "device_id": "phone-A",
+  "updated_at": 1731052800000,
+  "states": {
+    "note:memo_20261031_123000:买两个 50a class t 保险丝": {
+      "completed": true, "updated_at": 1731052800000,
+      "memo_id": "memo_20261031_123000", "index": 0
+    }
+  },
+  "manual": {
+    "<uuid>": {"id": "<uuid>", "task": "给绿萝浇水", "completed": false,
+               "updated_at": 1731052800000, "deleted": false}
+  }
+}
+```
+
+稳定 key 是 `note:<memoId>:<normalizeTask(task)>`——任务文本去空白、折叠空格、
+转小写。Mac 重跑提炼可能把任务措辞改了，所以还带 `memo_id + index` 兜底，
+按时间戳取最近的一条，勾选不会凭空复活。手工待办的删除用**墓碑**
+（`deleted: true`）而不是物理删行，否则另一台设备的旧文件会把它"复活"。
+时间戳单调递增（本机时钟回拨时用 `merged.updated_at + 1`），保证刚点的那一下
+一定赢过文件里已有的记录。
+
+App 侧 `TodoService` 用串行队列把所有写操作排队，先写本机 SQLite（秒开、
+断网也能用），再写共享状态文件；文件写失败只记日志、不回滚本地状态。
+冷启动、回到前台、从详情页返回、下拉刷新都会做一次**对账**：把别的设备
+同步过来的勾选覆盖回本机 DB，同时把本机历史上的老勾选补种进状态文件。
+
+> 状态文件变化不会产生新的 `inbox/*.json`，收件箱监听感知不到，
+> 所以「待办」页另有一个 12 秒轮询（`AppConfig.todoStatePollInterval`）。
+> 这是刻意的：宁可多读几个小 JSON，也不能让别的手机勾完这边一直不刷新。
+
+Mac 端是**只读**的：`todo_state.py` 按同样的 key 规则合并状态，
+`./run.sh --todos` 打印未完成 / 已完成总览，`./run.sh --check` 多一行
+「待办状态 ✓ N 个设备文件 / N 条勾选 / N 条手工待办」。Mac 从不写
+`todos/`，避免引入第三个写者。
+
+`./run.sh --todos` 实测（还没手机写过状态文件时）：
+
+```
+未完成 7 条
+  [ ] 维修 QCY T20 (AilyPods) 左耳故障  ← memo_20261031_155749
+  [ ] 前往棉花糖家                       ← memo_20261031_212159
+已完成 0 条
+```
+
 ---
 
 ## 四、同步契约
@@ -623,7 +712,10 @@ APK 就能看到纠错效果。原始 ASR 输出另存 `original_transcript`（�
 1. `device_id` 不由 Mac 写（Mac 不知道，也不该编造），手机保留自己的原值；
 2. `embedding_model` 与本地不一致时**丢弃回传向量、本机重算**——
    跨模型比对毫无意义，宁可多算一次也不能悄悄搜错；
-3. 重新同步时按任务文本对齐合并 TODO，**保留用户已勾选的状态**。
+3. 重新同步时按任务文本对齐合并 TODO，**保留用户已勾选的状态**；
+   真正跨设备的勾选状态不写回这份契约，而是走 `todos/<deviceId>.json`
+   （见第三节第 9 条）。也就是说 `todos[].status` 始终是 Mac 提炼时的初值，
+   用户后来勾没勾以状态文件为准——手机和 Mac 都按这个顺序覆盖。
 
 Mac 端若 Ollama 挂了，会进入**降级模式**：只回传原始转写 + 截断摘要，
 `processing.degraded = true`。用户至少不会丢内容。
@@ -670,8 +762,8 @@ Mac 端若 Ollama 挂了，会进入**降级模式**：只回传原始转写 + �
 
 ## 七、已知限制（v0.1 范围外）
 
-- **TODO 勾选只存本机**，不回写给 Mac 的 JSON；下次同步按任务文本合并，
-  但两台手机之间不互相同步勾选状态。
+- **待办勾选按设备时钟做 last-write-wins**，不是 CRDT。两台手机时钟差得离谱、
+  又在同一秒勾同一条时，以时间戳大的为准；日常使用不会遇到，但没有冲突提示 UI。
 - **iOS 无法后台常驻 Syncthing**，需第三方 App 配合。
 - **删除记录不删音频**，音频留在 `outbox/` 作为原始素材。
 - **语义检索阈值是按 10 条记录标定的**（`semanticMinScore = 0.45`）。记录上千条后
@@ -687,7 +779,7 @@ Mac 端若 Ollama 挂了，会进入**降级模式**：只回传原始转写 + �
 
 ```bash
 flutter analyze                     # 静态检查（当前 0 issue）
-flutter test                        # 52 个单测
+flutter test                        # 71 个单测
 
 # 没有 Xcode / Android SDK 时，用它做真正的 Dart 编译验证（含资产打包）：
 flutter build bundle --target-platform=darwin
@@ -696,7 +788,8 @@ flutter build ios --release --no-codesign
 flutter build macos --release
 
 cd mac_processor
-./run.sh --check                    # 环境自检（含提示词 token 占用、词库状态）
+./run.sh --check                    # 环境自检（含提示词 token 占用、词库、待办状态）
+./run.sh --todos                    # 所有笔记待办 + 手机勾选状态总览（只读）
 ./run.sh --once                     # 处理完积压就退出（适合 cron）
 ./run.sh --file path/to/memo.m4a    # 单文件调试
 ./run.sh --file path/to/memo.m4a --force   # 忽略去重，强制重跑
@@ -704,8 +797,11 @@ cd mac_processor
 ./run.sh --normalize-tags           # 预览已有标签的合并方案（不写文件）
 ./run.sh --normalize-tags --apply   # 备份后写回，统一标签名
 
-# Python 单测（词表预算 / 词典纠错 / LLM 护栏 / 标签归并，共 62 条）
+# Python 单测（词表预算 / 词典纠错 / LLM 护栏 / 标签归并 / 待办状态，共 75 条）
 .venv/bin/python -m unittest discover -s tests -t . -v
+
+# 本地出升级包：versionCode 必须大于手机上已装的（见 1.6）
+flutter build apk --release --split-per-abi --build-number 10
 ```
 
 > 若本机配了 HTTP 代理，`flutter test` 会因为 localhost WebSocket 被代理劫持而失败，

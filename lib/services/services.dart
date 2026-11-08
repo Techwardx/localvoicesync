@@ -16,6 +16,7 @@ import 'search_service.dart';
 import 'settings_store.dart';
 import 'syncthing_service.dart';
 import 'text_note_service.dart';
+import 'todo_service.dart';
 
 /// 所有长生命周期服务的容器。
 ///
@@ -35,6 +36,7 @@ class Services {
     required this.textNotes,
     required this.inbox,
     required this.syncthing,
+    required this.todos,
     required this.initialPending,
     required this.allFilesAccess,
   });
@@ -49,6 +51,7 @@ class Services {
   final TextNoteService textNotes;
   final InboxWatcherService inbox;
   final SyncthingService syncthing;
+  final TodoService todos;
 
   /// 冷启动时统计的"待处理条数"，避免首帧显示 0 再跳变。
   final int initialPending;
@@ -109,6 +112,11 @@ class Services {
     final recorder = AudioRecorderService(paths: paths, db: database);
     final textNotes = TextNoteService(paths: paths, db: database);
     final inbox = InboxWatcherService(paths: paths, db: database);
+    final todos = TodoService(
+      paths: paths,
+      db: database,
+      deviceId: settings.deviceId,
+    );
 
     // 上次进程被杀留下的半截录音，先救回来再进 UI。
     await recorder.recoverOrphans(deviceId: settings.deviceId);
@@ -125,7 +133,7 @@ class Services {
 
     final pending = await database.pendingCount();
 
-    return Services(
+    final services = Services(
       paths: paths,
       database: database,
       settingsStore: settingsStore,
@@ -136,9 +144,20 @@ class Services {
       textNotes: textNotes,
       inbox: inbox,
       syncthing: const SyncthingService(),
+      todos: todos,
       initialPending: pending,
       allFilesAccess: allFiles,
     );
+
+    // 冷启动先对一次账：把别的设备勾掉的状态落实进本地库，
+    // 并把老版本「只存在 SQLite 里」的勾选补种进共享文件。
+    // 失败不阻塞启动（同步目录可能还没权限）。
+    try {
+      await todos.reconcile();
+    } on Object catch (error) {
+      AppLog.w('boot', '待办状态对账失败（不阻塞启动）：$error');
+    }
+    return services;
   }
 
   /// 申请「所有文件访问」，必要时把同步根切到共享存储。

@@ -9,8 +9,9 @@ import '../theme.dart';
 import 'home_page.dart';
 import 'search_page.dart';
 import 'settings_page.dart';
+import 'todo_page.dart';
 
-/// 三个主页面的外壳。
+/// 四个主页面的外壳。
 ///
 /// 用 [IndexedStack] 而不是重建页面：搜索页的状态（输入、结果、滚动位置）
 /// 在切走再切回来时必须还在，否则用户会觉得自己"刚才搜的东西没了"。
@@ -64,6 +65,12 @@ class _RootShellState extends ConsumerState<RootShell>
       AppLog.w('lifecycle', '刷新记录列表失败：$error');
     }
     try {
+      // 别的手机 / Mac 在后台改了 todos/*.json，回来时立刻对账。
+      await ref.read(todoListProvider.notifier).reconcile();
+    } on Object catch (error) {
+      AppLog.w('lifecycle', '刷新待办失败：$error');
+    }
+    try {
       await ref.read(syncStatusProvider.notifier).refresh();
     } on Object catch (error) {
       AppLog.w('lifecycle', '重探连接状态失败：$error');
@@ -75,7 +82,12 @@ class _RootShellState extends ConsumerState<RootShell>
     return Scaffold(
       body: IndexedStack(
         index: _index,
-        children: const [HomePage(), SearchPage(), SettingsPage()],
+        children: const [
+          HomePage(),
+          TodoPage(),
+          SearchPage(),
+          SettingsPage(),
+        ],
       ),
       bottomNavigationBar: Container(
         decoration: const BoxDecoration(
@@ -98,6 +110,11 @@ class _RootShellState extends ConsumerState<RootShell>
                 icon: Icon(Icons.mic_none_outlined),
                 selectedIcon: Icon(Icons.mic_none, color: AppTheme.primary),
                 label: '记录',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.checklist_outlined),
+                selectedIcon: Icon(Icons.checklist, color: AppTheme.primary),
+                label: '待办',
               ),
               NavigationDestination(
                 icon: Icon(Icons.search_outlined),

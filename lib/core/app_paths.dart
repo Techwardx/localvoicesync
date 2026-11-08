@@ -23,6 +23,7 @@ import 'app_config.dart';
 /// <同步根>/                        ← Android: /storage/emulated/0/Documents/LocalVoiceSync
 ///   .stignore                      ←   iOS/macOS: <Documents>/LocalVoiceSync
 ///   README.txt
+///   todos/                         ← 待办状态（一设备一份 json，见 TodoService）
 ///   Me_Notes/
 ///     .incoming/                   ← 录音中的半截文件（被 Syncthing 忽略）
 ///     outbox/                      ← 手机 → Mac
@@ -152,6 +153,14 @@ class AppPaths {
   Directory inboxDir(String dirName) =>
       Directory(p.join(memberRoot(dirName).path, AppConfig.inboxDirName));
 
+  /// 所有设备共享的待办状态目录（不是某个成员的子目录）。
+  Directory get todoStateDir =>
+      Directory(p.join(syncRoot.path, AppConfig.todoStateDirName));
+
+  /// 本机专属的那份状态文件。别的设备只读、绝不写它。
+  File todoStateFile(String deviceId) =>
+      File(p.join(todoStateDir.path, '$deviceId.json'));
+
   /// 音频最终位置（录音完成后的家）。
   File audioFile(String dirName, String fileName) =>
       File(p.join(outboxDir(dirName).path, fileName));
@@ -169,6 +178,7 @@ class AppPaths {
     await syncRoot.create(recursive: true);
     await localRoot.create(recursive: true);
     await logDir.create(recursive: true);
+    await todoStateDir.create(recursive: true);
   }
 
   /// 为某个成员准备好目录骨架，并写入 `.stignore`。
@@ -215,9 +225,17 @@ LocalVoiceSync 同步目录
 
 每个家庭成员一个子目录（Me_Notes / Dad_Notes / Mom_Notes / <自定义>_Notes）。
 
+  todos/      待办事项的完成状态 + 手工新增的待办，一设备一份 <deviceId>.json
   .incoming/  录音进行中的临时文件，Syncthing 已忽略，不要手工删除
   outbox/     手机 → Mac：原始录音（memo_*.m4a）和文字随手记（memo_*.txt）
   inbox/      Mac → 手机：处理完的结构化结果（memo_*.json + memo_*.md）
+
+待办说明：
+  笔记里的待办由 Mac 从转写里提炼，写进 inbox/memo_*.json 的 todos 字段；
+  勾选状态和在 App「待办」页手工加的条目写在 todos/*.json。
+  每台手机只写自己那一份文件，所以两台手机同时改也不会产生冲突副本。
+  所有手机与 Mac 都会读全部文件，按每条记录的 updated_at 取最新。
+  Mac 只读这些文件（不写），可以用 `./run.sh --todos` 看待办总览。
 
 ⚠️ outbox / inbox 是**站在手机的视角**命名的，不是 Mac 的视角：
 

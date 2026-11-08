@@ -123,6 +123,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     final total = await services.database.totalCount();
     final pending = await services.database.pendingCount();
     final dbInfo = await services.database.debugInfo();
+    final todoInfo = await services.todos.debugInfo();
     if (!mounted) return;
     final inbox = services.inbox;
     final last = inbox.lastScanAt;
@@ -143,6 +144,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       '',
       '— 数据库自检 —',
       ...dbInfo,
+      '',
+      '— 待办状态 —',
+      ...todoInfo,
+      '',
       if (ref.read(lastErrorProvider).isNotEmpty) ...[
         '',
         '— 最近一次操作错误 —',
@@ -151,6 +156,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     ].join('\n');
     setState(() => _inboxReport = summary);
     ref.invalidate(memoListProvider);
+    ref.invalidate(todoListProvider);
     await _showReport('收件箱诊断', summary);
   }
 

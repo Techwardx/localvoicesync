@@ -62,8 +62,10 @@ local_voice_sync/
 │   ├── config.py  transcriber.py  extractor.py  embedder.py
 │   ├── hotwords.py                   自动家庭词表（按成员隔离 + token 预算）
 │   ├── corrector.py                  离线词典纠错（同音专名）
+│   ├── tag_registry.py               现有标签词表 + 确定性归类
+│   ├── tag_cleanup.py                一次性整理已有标签（备份 / 预览 / 写回）
 │   ├── lexicon/                      随仓库分发的词库（THUOCL MIT + custom.txt）
-│   ├── tests/                        Python 单测（unittest，34 条）
+│   ├── tests/                        Python 单测（unittest，62 条）
 │   ├── audio_utils.py                自己解码音频（绕开 PyAV 版本坑）
 │   ├── state.py                      sha256 去重
 │   ├── writer.py                     原子写 JSON / Markdown
@@ -517,6 +519,49 @@ LVS_WHISPER_BEAM_SIZE=1                     # 回退到贪心（更快但会丢�
 ./run.sh --file ~/LocalVoiceSync/Me_Notes/outbox/memo_20261031_212159.m4a --force
 ```
 
+### 8. 标签体系：新标签先查已有，能归类就归类
+
+提炼模型每次只看见**一条**笔记，不知道知识库里已经有哪些标签，于是
+「ASL手语 / 手语 AI / 无障碍数据集」「系统测试 / 版本测试 / 测试」
+「QCY / QCY T20」会不断增殖——十几篇笔记长出 30 个标签，标签云就废了。
+同类笔记必须用同一个标签名，所以标签不能由 LLM 每条自由发挥。
+
+**日常防增量**（`tag_registry.py` + `extractor.py`）：
+
+1. 从所有成员的 `*/inbox/*.json` 汇总现有标签词表（带频次、时间），45 秒
+   TTL；每写完一条笔记立刻失效，下一篇马上能看到刚出现的新标签。
+2. 提炼时把词表前 40 个塞进提示词，明确要求「**直接照抄已有标签原文**、
+   严禁造同义变体、整篇最多新建 1 个」。
+3. 代码再做一次确定性兜底，即使模型没听话也不会漏：全角/空格/大小写归一后
+   精确匹配 → 包含关系（`QCY` ⊂ `QCY T20`）→ 共享非泛化词根
+   （`ASL手语` / `手语 AI` → `手语`）→ 剩下的才允许新建，且受
+   `LVS_TAG_MAX_NEW` 限制（冷启动词表 <6 个时自动放宽到 3 个）。
+4. 被合并或被限额砍掉的写法**不丢**：补进 `aliases`。手机的 `searchableText`
+   包含 aliases，按旧词照样搜得到，Whisper 热词也照样认得。
+
+**一次性清理**（`tag_cleanup.py`）：
+
+```bash
+./run.sh --normalize-tags             # 只预览分组和逐篇改动，不写文件
+./run.sh --normalize-tags --apply     # 备份后原子写回 JSON + Markdown
+./run.sh --normalize-tags --no-llm    # Ollama 没起时只跑确定性规则
+```
+
+LLM 只负责**提建议**，代码逐字段校验：组成员必须是真实存在的标签、组内
+每一对都得有词汇证据、规范名必须是成员原文或成员里真实出现的片段。
+所以它提的「停车 + 导航 + 出行准备 → 出行」会被整组拒绝；而它漏掉的
+「ASL手语 / 手语 AI」由确定性词根规则照样并成「手语」。规范名优先用
+已经反复出现的老名字（`系统测试` 而不是简化成 `测试`）。
+
+写回前备份到 `~/.localvoicesync/tag-backups/<时间戳>/`，笔记里留
+`original_tags` 便于追溯和回退，`aliases` 补上旧标签名，向量按新标签重算。
+手机端 `ingest_log` 按 `文件大小 + mtime` 判重，文件一变就会重新入库，
+**不用重装 APK**。
+
+真实数据跑完：32 个标签 → 26 个；两条手语笔记现在都带 `手语`、`无障碍`。
+`./run.sh --check` 会打印当前词表规模。开关：`LVS_TAG_MERGE=0`（回到旧行为）、
+`LVS_TAG_MAX_NEW=2`。
+
 ---
 
 ## 四、同步契约
@@ -544,6 +589,7 @@ Mac 端写入 `inbox/<id>.json`：
     {"from": "听", "to": "停", "source": "llm"}
   ],
   "original_transcript": "今天检查了太阳能板的配线……（Whisper 原始输出，只在改过时才出现）",
+  "original_tags": ["太阳能板", "配线", "PowMr"],
   "embedding": [0.012, -0.045, 0.231],
   "embedding_model": "bge-small-zh-v1.5",
   "embedding_dim": 512,
@@ -565,6 +611,10 @@ APK 就能看到纠错效果。原始 ASR 输出另存 `original_transcript`（�
 才写，避免每条记录多一份全文副本），改动明细在 `corrections` 里，`source`
 取值 `personal` / `custom` / `lexicon` / `llm`。两者都是新增字段，旧客户端
 会直接忽略。
+
+`tags` 一律取自现有标签词表（见第三节第 8 条），被合并掉的旧写法补进
+`aliases`；执行过标签整理的笔记额外带 `original_tags`，记录整理前的标签，
+便于回退。这些都是客户端会忽略的附加字段。
 
 同时写一份人类可读的 `<id>.md`。失败时写 `<id>.error.json`，手机端把记录标成「失败」。
 
@@ -637,7 +687,7 @@ Mac 端若 Ollama 挂了，会进入**降级模式**：只回传原始转写 + �
 
 ```bash
 flutter analyze                     # 静态检查（当前 0 issue）
-flutter test                        # 24 个单测
+flutter test                        # 52 个单测
 
 # 没有 Xcode / Android SDK 时，用它做真正的 Dart 编译验证（含资产打包）：
 flutter build bundle --target-platform=darwin
@@ -649,9 +699,12 @@ cd mac_processor
 ./run.sh --check                    # 环境自检（含提示词 token 占用、词库状态）
 ./run.sh --once                     # 处理完积压就退出（适合 cron）
 ./run.sh --file path/to/memo.m4a    # 单文件调试
+./run.sh --file path/to/memo.m4a --force   # 忽略去重，强制重跑
 ./run.sh --dry-run                  # 只处理不写文件
+./run.sh --normalize-tags           # 预览已有标签的合并方案（不写文件）
+./run.sh --normalize-tags --apply   # 备份后写回，统一标签名
 
-# Python 单测（词表预算 / 词典纠错 / LLM 安全护栏，共 34 条）
+# Python 单测（词表预算 / 词典纠错 / LLM 护栏 / 标签归并，共 62 条）
 .venv/bin/python -m unittest discover -s tests -t . -v
 ```
 

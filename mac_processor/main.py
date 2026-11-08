@@ -35,6 +35,8 @@ from config import Config
 from embedder import Embedder
 from extractor import ExtractionError, OllamaClient
 from state import StateStore, sha256_of
+from tag_cleanup import normalize_existing_notes, print_report
+from tag_registry import TagRegistry
 from transcriber import WhisperPool
 from writer import write_error, write_result
 try:
@@ -169,6 +171,7 @@ class Processor:
         self.pool = WhisperPool(cfg)
         self.embedder = Embedder(cfg)
         self.ollama = OllamaClient(cfg)
+        self.tags = TagRegistry(cfg.sync_root, max_new_tags=cfg.tag_max_new)
 
         self._executor = ThreadPoolExecutor(
             max_workers=max(1, cfg.concurrency), thread_name_prefix="lvs"
@@ -287,6 +290,8 @@ class Processor:
             return
 
         write_result(job.inbox_dir, job.memo_id, payload)
+        # 刚落盘的笔记里可能有新标签，下一篇文章必须马上看得到。
+        self.tags.invalidate()
         self.state.mark(str(path), digest, "ok", f"{elapsed:.1f}s")
 
     def _correct(
@@ -367,6 +372,7 @@ class Processor:
                 author=job.author,
                 created_at=job.created_at,
                 kind=job.kind,
+                existing_tags=self.tags.tags(limit=40),
             )
         except ExtractionError as error:
             LOGGER.warning("提炼降级（只回传转写）：%s", error)
@@ -378,6 +384,26 @@ class Processor:
                 "tags": [],
                 "aliases": [],
             }
+
+        # LLM 负责语义复用（提示词里给了全部已有标签），这里再做一次确定性
+        # 兜底：即使模型没听话造了「QCY」这种变体，也一定会被并回已有标签。
+        if not degraded and self.cfg.tag_merge:
+            resolution = self.tags.resolve(extracted.get("tags", []))
+            # 无论有没有"改动"都要用归并结果：它还会做大小写/空格归一和去重。
+            extracted["tags"] = resolution.tags
+            if resolution.changed:
+                aliases = list(extracted.get("aliases") or [])
+                for variant in resolution.variants:
+                    if variant not in aliases and len(aliases) < 12:
+                        aliases.append(variant)
+                extracted["aliases"] = aliases
+                LOGGER.info(
+                    "标签归并：%s → %s；新建 %s；旧写法保留进 aliases %s",
+                    resolution.mapped or "无",
+                    resolution.tags,
+                    resolution.created or "无",
+                    resolution.variants or "无",
+                )
 
         vector = self.embedder.embed(
             " ".join(
@@ -536,6 +562,21 @@ def run_check(cfg: Config) -> int:
     except Exception as error:  # noqa: BLE001
         print(f"本地词库            ✗  {error}")
 
+    try:
+        from tag_registry import all_tags, iter_note_paths
+
+        tags = all_tags(cfg.sync_root)
+        notes = len(list(iter_note_paths(cfg.sync_root)))
+        print(f"标签词表            ✓  {len(tags)} 个标签 / {notes} 篇笔记")
+        if tags:
+            print(
+                "                    "
+                + "、".join(tags[:12])
+                + (" …" if len(tags) > 12 else "")
+            )
+    except Exception as error:  # noqa: BLE001
+        print(f"标签词表            ✗  {error}")
+
     ollama = OllamaClient(cfg)
     if ollama.health():
         has_model = ollama.has_model()
@@ -592,6 +633,19 @@ def main(argv: list[str] | None = None) -> int:
         help="配合 --file：忽略去重记录，强制重新处理（调完转写参数后重跑用）",
     )
     parser.add_argument("--dry-run", action="store_true", help="只处理不写文件")
+    parser.add_argument(
+        "--normalize-tags",
+        action="store_true",
+        help="整理已有标签：默认只预览，加 --apply 才写回（自动备份）",
+    )
+    parser.add_argument(
+        "--apply", action="store_true", help="配合 --normalize-tags：实际写回"
+    )
+    parser.add_argument(
+        "--no-llm",
+        action="store_true",
+        help="配合 --normalize-tags：只用确定性规则，不调用 Ollama",
+    )
     args = parser.parse_args(argv)
 
     cfg = Config.load(args.sync_root)
@@ -601,6 +655,16 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.check:
         return run_check(cfg)
+
+    if args.normalize_tags:
+        report = normalize_existing_notes(
+            cfg,
+            OllamaClient(cfg),
+            apply=args.apply and not args.dry_run,
+            use_llm=not args.no_llm,
+        )
+        print_report(report)
+        return 0
 
     processor = Processor(cfg)
 

@@ -40,6 +40,7 @@ SYSTEM_PROMPT = """你是一个严谨的中文知识整理助手，服务于一�
 6. todos 只收"需要有人去做"的动作，status 一律填 "pending"；
    原文明确说已经做完的才填 "completed"。没有就给空数组。
 7. tags 是 2~5 个名词性标签，用于分类浏览；不要用"记录""备忘"这类无信息量的词。
+   同一主题必须用同一个标签名，优先照抄输入里给出的「已有标签」原文。
 8. aliases 是帮助日后搜索的同义词/别称/英文对照/常见错别字写法，
    例如"逆变器"的 aliases 可以包含 "inverter"、"变流器"。
 
@@ -55,12 +56,59 @@ SYSTEM_PROMPT = """你是一个严谨的中文知识整理助手，服务于一�
 USER_TEMPLATE = """作者：{author}
 记录时间：{created_at}
 来源类型：{kind}
-
+{tag_block}
 --- 转写正文开始 ---
 {body}
 --- 转写正文结束 ---
 
 请按要求输出 JSON。"""
+
+# 提炼时把「现有标签词表」一并交给模型。模型只看得见这一条笔记，不给它
+# 词表，它就每次都重新造一批同义词（ASL手语 / 手语 AI / 无障碍数据集…）。
+TAG_BLOCK_TEMPLATE = """
+本知识库已有标签（按使用频次排序，优先复用）：
+{known}
+
+标签规则（重要）：
+- 先判断这条笔记属于上面哪些主题，**直接照抄已有标签原文**，
+  不要改写、不要缩写、不要加后缀。
+- 已有标签能覆盖的主题，绝不新建同义词。
+  例：已有「手语」就不要再写「手语识别」「ASL手语」「手语 AI」。
+- 只有主题确实不属于任何已有标签时才新建，且整篇最多新建 1 个标签。
+- tags 总数 2~5 个，名词性、精炼，不要「记录」「备忘」这类空词。"""
+
+EMPTY_TAG_BLOCK = """
+本知识库目前还没有标签，请为这条笔记建立 2~4 个精炼的名词性标签。
+以后同类笔记会复用这些标签，所以命名要通用、不要带具体日期或细节。"""
+
+
+# 一次性整理已有标签时用：让 LLM 给出语义分组，代码再做严格校验与兜底。
+MERGE_SYSTEM_PROMPT = """你是一个标签体系整理员，服务于家庭私有语音知识库。
+输入是这个知识库目前已有的全部标签，里面有很多同义或同主题的重复写法。
+你的任务是把**确实属于同一主题**的标签归成一组，给出统一的规范名。
+
+必须遵守的规则：
+1. 只输出一个 JSON 对象，不要解释、不要 Markdown 代码块，格式为：
+   {"groups": [{"canonical": "统一标签名", "members": ["标签A", "标签B"]}]}
+2. members 里的每个词都必须是输入清单里**原样出现**的标签；每个标签最多
+   出现在一个组里；没有合并必要的标签不要写进任何组。
+3. canonical 只能是某个 member 的原文，或某个 member 里**实际出现的片段**
+   （例如把「ASL手语」「手语 AI」统一成「手语」）。不要生造新词，
+   不要用「数据工程」「系统管理」「出行」这种凭空概括出来的名字，
+   更不要用「数据」「系统」「管理」「设计」这类会吞掉别的主题的词。
+4. 同一组里的标签必须**每两个都长得像**：包含关系或共享同一个词根。
+   「ASL手语 / 手语 AI / 手语识别」共享「手语」，可以合并；
+   「系统测试 / 版本测试 / 测试」共享「测试」，可以合并。
+5. **不同维度绝对不要合并**：「蓝牙耳机」（物件）和「硬件维修」（动作）、
+   「停车」和「导航」、「数据库优化」（软件索引）和「无障碍数据集」（AI 语料）
+   都不是同义词，哪怕它们出现在同一篇笔记里。
+6. 只合并语义确实相同或高度重叠的标签，宁可少合并，不可把不同主题搅在一起。
+7. 每组至少 2 个成员，最多 4 个。"""
+
+MERGE_USER_TEMPLATE = """现有标签（后面的数字是使用次数）：
+{tags}
+
+请输出分组 JSON。"""
 
 
 CORRECT_SYSTEM_PROMPT = """你是中文语音识别结果的校对员，服务一个家庭私有语音备忘系统。
@@ -134,9 +182,24 @@ class OllamaClient:
 
     # ------------------------------------------------------------- 提炼
 
-    def extract(self, *, body: str, author: str, created_at: str, kind: str) -> dict[str, Any]:
+    def extract(
+        self,
+        *,
+        body: str,
+        author: str,
+        created_at: str,
+        kind: str,
+        existing_tags: Iterable[str] = (),
+    ) -> dict[str, Any]:
         if not body.strip():
             return _empty_result()
+
+        known = [str(t).strip() for t in existing_tags if str(t).strip()][:40]
+        tag_block = (
+            TAG_BLOCK_TEMPLATE.format(known="、".join(known))
+            if known
+            else EMPTY_TAG_BLOCK
+        )
 
         payload = {
             "model": self._cfg.ollama_model,
@@ -154,7 +217,11 @@ class OllamaClient:
                 {
                     "role": "user",
                     "content": USER_TEMPLATE.format(
-                        author=author, created_at=created_at, kind=kind, body=body
+                        author=author,
+                        created_at=created_at,
+                        kind=kind,
+                        tag_block=tag_block,
+                        body=body,
                     ),
                 },
             ],
@@ -190,6 +257,63 @@ class OllamaClient:
             raise ExtractionError(f"模型输出无法解析为 JSON：{content[:300]}")
 
         return normalize_result(parsed)
+
+    # ------------------------------------------------------------- 标签整理
+
+    def plan_tag_merge(
+        self, tags: list[str], counts: dict[str, int] | None = None
+    ) -> list[dict[str, Any]]:
+        """让本地 LLM 给现有标签做语义分组。
+
+        只在 `--normalize-tags` 这种一次性整理时调用一次，不进日常流水线。
+        输出**不信任**：调用方（tag_cleanup.py）会逐字段校验，任何越界的
+        分组直接丢弃，退回纯确定性归并。
+        """
+        if len(tags) < 2:
+            return []
+        lines = [
+            f"- {tag}（{counts.get(tag, 1) if counts else 1} 次）" for tag in tags[:120]
+        ]
+        payload = {
+            "model": self._cfg.ollama_model,
+            "stream": False,
+            "format": "json",
+            "think": False,
+            "options": {
+                "temperature": 0.1,
+                "top_p": 0.9,
+                "num_ctx": self._cfg.ollama_num_ctx,
+                "num_predict": 1024,
+            },
+            "messages": [
+                {"role": "system", "content": MERGE_SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": MERGE_USER_TEMPLATE.format(tags="\n".join(lines)),
+                },
+            ],
+        }
+        try:
+            response = self._session.post(
+                f"{self._cfg.ollama_url}/api/chat",
+                json=payload,
+                timeout=min(self._cfg.ollama_timeout, 180.0),
+            )
+        except requests.RequestException as error:
+            LOGGER.warning("标签分组跳过（连不上 Ollama）：%s", error)
+            return []
+        if response.status_code != 200:
+            LOGGER.warning("标签分组跳过：Ollama 返回 %s", response.status_code)
+            return []
+        try:
+            data = response.json()
+        except ValueError:
+            return []
+        parsed = _parse_json_block((data.get("message") or {}).get("content", ""))
+        if not parsed:
+            return []
+        groups = parsed.get("groups")
+        return groups if isinstance(groups, list) else []
 
     # ------------------------------------------------------------- 二次校正
 

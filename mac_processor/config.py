@@ -83,6 +83,11 @@ class Config:
     ollama_timeout: float
     ollama_num_ctx: int
 
+    # 标签归并：提炼时把已有标签词表交给 LLM，再用确定性规则兜底；
+    # 每篇笔记最多允许新建几个标签（防止同义标签无限增殖）。
+    tag_merge: bool
+    tag_max_new: int
+
     # ---------------------------------------------------------------- 向量
     embed_model: str
     embed_dim: int
@@ -151,6 +156,10 @@ class Config:
             ollama_model=_env_str("LVS_OLLAMA_MODEL", "qwen3.5:9b-q4_K_M"),
             ollama_timeout=_env_float("LVS_OLLAMA_TIMEOUT", 300.0),
             ollama_num_ctx=_env_int("LVS_OLLAMA_NUM_CTX", 8192),
+            # 关掉它 = 回到"每条笔记自由造标签"的旧行为（仅供对照测试）。
+            tag_merge=_env_bool("LVS_TAG_MERGE", True),
+            # 一篇笔记最多新建 1 个标签；冷启动（词表 <6 个）自动放宽到 3 个。
+            tag_max_new=_env_int("LVS_TAG_MAX_NEW", 1),
             # 必须和手机端 AppConfig.embeddingModelId 完全一致，
             # 否则两边算出来的向量不在同一个空间，语义检索会失效。
             embed_model=_env_str("LVS_EMBED_MODEL", "BAAI/bge-small-zh-v1.5"),
@@ -199,6 +208,8 @@ class Config:
             f" / LLM{'开' if self.llm_correct else '关'}\n"
             f"词库目录     {self.lexicon_dir}\n"
             f"提炼模型     {self.ollama_model} @ {self.ollama_url}\n"
+            f"标签归并     {'开' if self.tag_merge else '关'}"
+            f"（每篇最多新建 {self.tag_max_new} 个）\n"
             f"向量模型     {self.embed_model} ({self.embed_dim} 维)\n"
             f"并发度       {self.concurrency}\n"
             f"试运行       {self.dry_run}"

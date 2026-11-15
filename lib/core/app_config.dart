@@ -6,7 +6,7 @@ class AppConfig {
 
   /// 展示用的版本号。必须跟 `pubspec.yaml` 的 `version:` 保持一致，
   /// 否则用户报障时说的版本号跟 APK 里实际跑的对不上。
-  static const String appVersion = '0.1.9';
+  static const String appVersion = '0.1.10';
   static const String bundleId = 'com.localvoicesync.app';
 
   // ---------------------------------------------------------------- 目录布局
@@ -54,6 +54,25 @@ class AppConfig {
   static const String tmpPrefix = '.tmp_';
   static const String memoPrefix = 'memo_';
   static const String deviceIdPrefix = 'dev_';
+
+  // ---------------------------------------------------------------- 编辑文本笔记
+  /// 文本笔记的「旁车」后缀：`<memoId>.meta.json`，和正文并排放在 outbox。
+  ///
+  /// 为什么标签不能写进正文：正文会被 Mac 原样当作转写喂给模型，任何元数据
+  /// 都会污染 `raw_transcript`。独立文件坏了最多退回 AI 标签，正文永远干净。
+  ///
+  /// 为什么必须有这个文件：Mac 用 sha256 去重，**只改标签不改正文时正文哈希
+  /// 不变**，会被判定为"处理过了"直接跳过。Mac 端把旁车一起算进哈希，
+  /// 并在监听时把 `<id>.meta.json` 映射回 `<id>.txt`，这样改标签也能触发重提炼。
+  static const String noteMetaSuffix = '.meta.json';
+
+  /// 用户手改标签的数量上限。和 Mac 端 `tag_registry.MAX_USER_TAGS`、
+  /// `note_meta.MAX_USER_TAGS` 保持一致——三处对不上时，手机上删掉的标签
+  /// 会被 Mac 补回来。
+  static const int maxUserTags = 8;
+
+  /// 单个标签的最大长度（字符）。Mac 端超长的会直接丢弃。
+  static const int maxTagLength = 24;
 
   // ---------------------------------------------------------------- 数据库
   static const int databaseVersion = 2;

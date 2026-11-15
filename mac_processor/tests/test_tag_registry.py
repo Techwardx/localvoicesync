@@ -152,6 +152,48 @@ class RegistryTest(unittest.TestCase):
         self.assertNotIn("不该出现", TagRegistry(self.root).tags())
 
 
+class ResolveUserTest(unittest.TestCase):
+    """用户手写的标签：优先保真，但同义变体仍然并回已有写法。"""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        for index, tags in enumerate([["手语", "无障碍"], ["手语", "语音"]]):
+            _write_note(self.root, f"memo_{index:03d}.json", tags)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_exact_tags_are_kept(self) -> None:
+        result = TagRegistry(self.root).resolve_user(["手语", "无障碍"])
+        self.assertEqual(result, ["手语", "无障碍"])
+
+    def test_variant_is_mapped_to_existing_tag(self) -> None:
+        # 用户打「手语识别」，库里已有「手语」——不能又长出一个变体。
+        self.assertEqual(TagRegistry(self.root).resolve_user(["手语识别"]), ["手语"])
+
+    def test_new_tag_is_allowed_without_consuming_the_ai_cap(self) -> None:
+        # max_new_tags=0 是给 AI 的限制，用户明确新建的主题不受它管。
+        registry = TagRegistry(self.root, max_new_tags=0)
+        result = registry.resolve_user(["手语", "太阳能板", "逆变器"])
+        self.assertEqual(result, ["手语", "太阳能板", "逆变器"])
+
+    def test_duplicates_and_blank_values_are_dropped(self) -> None:
+        result = TagRegistry(self.root).resolve_user(["手语", " 手语 ", "", "  "])
+        self.assertEqual(result, ["手语"])
+
+    def test_user_tag_count_is_capped(self) -> None:
+        result = TagRegistry(self.root).resolve_user([f"标签{i}" for i in range(20)])
+        self.assertEqual(len(result), 8)
+
+    def test_overlong_tag_is_dropped(self) -> None:
+        result = TagRegistry(self.root).resolve_user(["x" * 40, "手语"])
+        self.assertEqual(result, ["手语"])
+
+    def test_empty_input_stays_empty(self) -> None:
+        self.assertEqual(TagRegistry(self.root).resolve_user([]), [])
+
+
 class DeterministicEdgeTest(unittest.TestCase):
     def test_edges_cover_containment_and_shared_core(self) -> None:
         edges = deterministic_edges(

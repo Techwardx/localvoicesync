@@ -35,7 +35,8 @@ import corrector
 from config import Config
 from embedder import Embedder
 from extractor import ExtractionError, OllamaClient
-from state import StateStore, sha256_of
+from note_meta import META_SUFFIX, digest_for, note_path_for_meta, read_meta
+from state import StateStore
 from tag_cleanup import normalize_existing_notes, print_report
 from tag_registry import TagRegistry
 from todo_state import format_report, state_stats
@@ -219,10 +220,21 @@ class Processor:
         for outbox in root.glob("*/outbox"):
             if not outbox.is_dir():
                 continue
+            # 用 set 去重：旁车和正文会指向同一个任务，只提交一次。
+            targets: set[Path] = set()
             for entry in sorted(outbox.iterdir()):
-                if entry.is_file() and build_job(entry) is not None:
-                    self.submit(entry)
-                    count += 1
+                if not entry.is_file():
+                    continue
+                if entry.name.endswith(META_SUFFIX):
+                    note = note_path_for_meta(entry)
+                    if note is not None:
+                        targets.add(note)
+                    continue
+                if build_job(entry) is not None:
+                    targets.add(entry)
+            for target in sorted(targets):
+                self.submit(target)
+                count += 1
         if count:
             LOGGER.info("积压扫描：提交 %d 个文件", count)
         return count
@@ -255,7 +267,9 @@ class Processor:
             LOGGER.warning("文件迟迟没有写完，跳过本轮：%s", path.name)
             return
 
-        digest = sha256_of(path)
+        # 组合哈希：正文变了算变，**只改标签（旁车变了）也算变**。
+        # 没有旁车时它就是正文的 sha256，历史记录不会因为升级被重跑。
+        digest = digest_for(path)
         # force 只给 --file 用：调完转写参数（比如换提示词、调 beam）之后，
         # 用户需要能把某条旧录音重新跑一遍看效果，否则只能手工去删状态库。
         if not force and self.state.already_done(str(path), digest):
@@ -356,6 +370,15 @@ class Processor:
         else:
             transcript = path.read_text(encoding="utf-8", errors="replace").strip()
 
+        # 文本笔记的旁车：用户在手机上改过标签，就以他的为准。
+        # 语音笔记没有旁车（App 也不给编辑），这里恒为 None。
+        user_meta = read_meta(path) if job.kind == "text" else None
+        if user_meta is not None and user_meta.tags_edited:
+            LOGGER.info(
+                "采用用户标签：%s",
+                "、".join(user_meta.tags) if user_meta.tags else "（用户清空了标签）",
+            )
+
         if not transcript:
             raise ExtractionError("转写结果为空，无法提炼")
 
@@ -387,9 +410,17 @@ class Processor:
                 "aliases": [],
             }
 
+        # 标签优先级：用户手写 > AI 归并。
+        #
+        # 用户改过标签后，AI 的 tags 直接丢掉——不是"参考一下"，是彻底不采信。
+        # 他可能只是删掉了一个不想要的标签，让模型再补回来等于白改。
+        # 但用户标签仍然过一遍 resolve_user：把「手语识别」并回已有的「手语」，
+        # 否则又会重新长出同义变体（这正是上次整理标签要解决的问题）。
+        if user_meta is not None and user_meta.tags_edited:
+            extracted["tags"] = self.tags.resolve_user(user_meta.tags)
         # LLM 负责语义复用（提示词里给了全部已有标签），这里再做一次确定性
         # 兜底：即使模型没听话造了「QCY」这种变体，也一定会被并回已有标签。
-        if not degraded and self.cfg.tag_merge:
+        elif not degraded and self.cfg.tag_merge:
             resolution = self.tags.resolve(extracted.get("tags", []))
             # 无论有没有"改动"都要用归并结果：它还会做大小写/空格归一和去重。
             extracted["tags"] = resolution.tags
@@ -452,6 +483,9 @@ class Processor:
         # 只有真的改过才存原始文本，避免每条记录都多一份全文副本。
         if original_transcript != transcript:
             payload["original_transcript"] = original_transcript
+        # 手机上编辑过就带上时间，方便日后追溯。旧客户端会忽略这个字段。
+        if user_meta is not None and user_meta.edited_at:
+            payload["edited_at"] = user_meta.edited_at
         return payload, degraded
 
 
@@ -466,26 +500,41 @@ class OutboxHandler(FileSystemEventHandler):  # type: ignore[misc]
 
     def _maybe_submit(self, raw_path: str) -> None:
         path = Path(raw_path)
-        if path.suffix.lower() not in AUDIO_SUFFIXES | TEXT_SUFFIXES:
-            return
         if path.name.startswith(".") or path.name.endswith(".part"):
+            return
+        # 标签旁车（<id>.meta.json）本身不是任务，它只是"这条笔记需要重跑"的
+        # 信号——真正要处理的是同名正文。没有这一步，只改标签就永远不会触发
+        # 提炼：txt 一个字节都没变，watchdog 又会把 .json 当无关文件丢掉。
+        from_meta = path.name.endswith(META_SUFFIX)
+        if from_meta:
+            note = note_path_for_meta(path)
+            if note is None:
+                return
+            path = note
+        if path.suffix.lower() not in AUDIO_SUFFIXES | TEXT_SUFFIXES:
             return
         if "outbox" not in path.parts:
             return
 
         # watchdog 在 macOS 上会对同一次写入连发多个事件，这里做 3 秒去抖。
-        key = str(path)
-        now = time.monotonic()
-        with self._lock:
-            last = self._recent.get(key)
-            if last is not None and now - last < 3.0:
-                return
-            self._recent[key] = now
-            if len(self._recent) > 512:
-                cutoff = now - 60
-                self._recent = {
-                    k: v for k, v in self._recent.items() if v > cutoff
-                }
+        #
+        # 但旁车事件**不去抖**：它和正文用的是同一个 key，若正文先到、旁车
+        # 晚一两秒到，就会被这 3 秒窗口吞掉——用户改的标签要等到下次再改
+        # 才会生效。旁车一次编辑只写一次，重复提交有 `_inflight` 和
+        # `already_done` 兜着，不会真的重复干活。
+        if not from_meta:
+            key = str(path)
+            now = time.monotonic()
+            with self._lock:
+                last = self._recent.get(key)
+                if last is not None and now - last < 3.0:
+                    return
+                self._recent[key] = now
+                if len(self._recent) > 512:
+                    cutoff = now - 60
+                    self._recent = {
+                        k: v for k, v in self._recent.items() if v > cutoff
+                    }
         self._processor.submit(path)
 
     def on_created(self, event: FileSystemEvent) -> None:  # type: ignore[override]
@@ -583,6 +632,14 @@ def run_check(cfg: Config) -> int:
         print(f"待办状态            ✓  {state_stats(cfg.sync_root)}")
     except Exception as error:  # noqa: BLE001
         print(f"待办状态            ✗  {error}")
+
+    try:
+        from note_meta import META_SUFFIX
+
+        edited = len(list(cfg.sync_root.glob(f"*/outbox/*{META_SUFFIX}")))
+        print(f"编辑旁车            ✓  {edited} 份（用户手改过标签的文本笔记）")
+    except Exception as error:  # noqa: BLE001
+        print(f"编辑旁车            ✗  {error}")
 
     ollama = OllamaClient(cfg)
     if ollama.health():

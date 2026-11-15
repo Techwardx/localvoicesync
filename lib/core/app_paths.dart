@@ -27,6 +27,8 @@ import 'app_config.dart';
 ///   Me_Notes/
 ///     .incoming/                   ← 录音中的半截文件（被 Syncthing 忽略）
 ///     outbox/                      ← 手机 → Mac
+///       memo_*.txt                 ←   文本笔记正文（编辑时覆盖这一份）
+///       memo_*.meta.json           ←   用户手改过的标签（可选，见 MemoEditService）
 ///     inbox/                       ← Mac → 手机
 ///   Dad_Notes/ ...
 ///   Mom_Notes/ ...
@@ -169,6 +171,14 @@ class AppPaths {
   File outboxFile(String dirName, String fileName) =>
       File(p.join(outboxDir(dirName).path, fileName));
 
+  /// 文本笔记的正文源文件。编辑时覆盖它，Mac 端靠内容哈希发现变化。
+  File noteSourceFile(String dirName, String memoId) =>
+      outboxFile(dirName, '$memoId.txt');
+
+  /// 文本笔记的旁车：用户手改过的标签。只有改过标签才存在。
+  File noteMetaFile(String dirName, String memoId) =>
+      outboxFile(dirName, '$memoId${AppConfig.noteMetaSuffix}');
+
   /// 录音过程中的临时文件位置。
   File temporaryAudioFile(String dirName, String fileName) =>
       File(p.join(incomingDir(dirName).path, fileName));
@@ -236,6 +246,13 @@ LocalVoiceSync 同步目录
   每台手机只写自己那一份文件，所以两台手机同时改也不会产生冲突副本。
   所有手机与 Mac 都会读全部文件，按每条记录的 updated_at 取最新。
   Mac 只读这些文件（不写），可以用 `./run.sh --todos` 看待办总览。
+
+编辑说明：
+  文本笔记可以在 App 详情页编辑（右上角铅笔）：改正文、加删标签都行。
+  保存时正文覆盖 outbox/memo_*.txt；改过标签会多一个 memo_*.meta.json，
+  里面是你手动指定的标签——Mac 以它为准，AI 不再覆盖。
+  文件一变 Mac 就自动重新提炼一次，不需要手动"上传"。
+  语音笔记不可编辑：它的正文是转写结果，改了就不真实了。
 
 ⚠️ outbox / inbox 是**站在手机的视角**命名的，不是 Mac 的视角：
 

@@ -11,6 +11,7 @@ import '../models/memo.dart';
 import '../providers.dart';
 import '../theme.dart';
 import '../widgets/todo_list.dart';
+import 'memo_edit_page.dart';
 
 /// 记录详情：Markdown 摘要 + 可勾选 TODO + 标签 + 可折叠原始转写。
 class MemoDetailPage extends ConsumerStatefulWidget {
@@ -69,6 +70,47 @@ class _MemoDetailPageState extends ConsumerState<MemoDetailPage> {
     }
   }
 
+  /// 打开编辑页。只有文本笔记有这个入口。
+  Future<void> _openEditor() async {
+    final memo = _memo;
+    if (memo == null || memo.kind != MemoKind.text) return;
+    final updated = await Navigator.of(context).push<Memo>(
+      MaterialPageRoute(builder: (_) => MemoEditPage(memo: memo)),
+    );
+    if (!mounted) return;
+    if (updated != null) {
+      setState(() => _memo = updated);
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text('已保存，电脑正在重新提炼（通常几十秒后自动刷新）'),
+          ),
+        );
+    }
+    await _load();
+  }
+
+  /// Mac 端上次处理失败时，手动把这条文本笔记再推一次。
+  Future<void> _resubmit() async {
+    final memo = _memo;
+    if (memo == null) return;
+    final updated = await ref
+        .read(memoListProvider.notifier)
+        .resubmitEdit(memo);
+    if (!mounted) return;
+    if (updated == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('重新提交失败，请重试')),
+      );
+      return;
+    }
+    setState(() => _memo = updated);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('已重新提交，等电脑提炼')),
+    );
+  }
+
   Future<void> _confirmDelete() async {
     final memo = _memo;
     if (memo == null) return;
@@ -102,6 +144,20 @@ class _MemoDetailPageState extends ConsumerState<MemoDetailPage> {
       appBar: AppBar(
         title: const Text(''),
         actions: [
+          // 只有文本笔记可编辑：语音的正文是转写结果，改它就不真实了。
+          if (memo != null && memo.kind == MemoKind.text) ...[
+            if (memo.status == MemoStatus.failed)
+              IconButton(
+                tooltip: '重新提炼',
+                onPressed: _resubmit,
+                icon: const Icon(Icons.refresh, size: 20),
+              ),
+            IconButton(
+              tooltip: '编辑正文与标签',
+              onPressed: _openEditor,
+              icon: const Icon(Icons.edit_outlined, size: 20),
+            ),
+          ],
           if (memo != null)
             IconButton(
               tooltip: '删除',

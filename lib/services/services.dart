@@ -12,6 +12,7 @@ import 'audio_recorder_service.dart';
 import 'database_service.dart';
 import 'embedding_isolate.dart';
 import 'inbox_watcher_service.dart';
+import 'memo_edit_service.dart';
 import 'search_service.dart';
 import 'settings_store.dart';
 import 'syncthing_service.dart';
@@ -34,6 +35,7 @@ class Services {
     required this.search,
     required this.recorder,
     required this.textNotes,
+    required this.memoEdit,
     required this.inbox,
     required this.syncthing,
     required this.todos,
@@ -49,6 +51,7 @@ class Services {
   final SearchService search;
   final AudioRecorderService recorder;
   final TextNoteService textNotes;
+  final MemoEditService memoEdit;
   final InboxWatcherService inbox;
   final SyncthingService syncthing;
   final TodoService todos;
@@ -111,6 +114,11 @@ class Services {
     final search = SearchService(db: database, engine: engine);
     final recorder = AudioRecorderService(paths: paths, db: database);
     final textNotes = TextNoteService(paths: paths, db: database);
+    final memoEdit = MemoEditService(
+      paths: paths,
+      db: database,
+      search: search,
+    );
     final inbox = InboxWatcherService(paths: paths, db: database);
     final todos = TodoService(
       paths: paths,
@@ -142,6 +150,7 @@ class Services {
       search: search,
       recorder: recorder,
       textNotes: textNotes,
+      memoEdit: memoEdit,
       inbox: inbox,
       syncthing: const SyncthingService(),
       todos: todos,

@@ -49,12 +49,13 @@ local_voice_sync/
 │   │   ├── embedding_isolate.dart        主 Isolate 侧封装
 │   │   ├── search_service.dart           混合检索 + RRF 融合
 │   │   ├── inbox_watcher_service.dart    解析 Mac 回传 JSON 入库
+│   │   ├── memo_edit_service.dart        编辑文本笔记（写回 outbox + 旁车）
 │   │   ├── todo_service.dart             待办状态文件读写 + 跨设备对账
 │   │   ├── syncthing_service.dart        Syncthing REST 探测
 │   │   ├── settings_store.dart
 │   │   ├── foreground_service.dart       Android 前台服务桥
 │   │   └── services.dart                 冷启动编排（boot）
-│   ├── views/                        root_shell / home / todo / search / detail / settings
+│   ├── views/                        root_shell / home / todo / search / detail / edit / settings
 │   └── widgets/                      status_light / record_button / memo_card / todo_list
 ├── assets/models/                    向量模型（不进 git，用脚本下载）
 ├── tool/fetch_embedding_model.sh
@@ -67,8 +68,9 @@ local_voice_sync/
 │   ├── tag_registry.py               现有标签词表 + 确定性归类
 │   ├── tag_cleanup.py                一次性整理已有标签（备份 / 预览 / 写回）
 │   ├── todo_state.py                 待办状态只读汇总（供给 --todos / --check）
+│   ├── note_meta.py                  编辑旁车（用户标签）+ 正文/旁车组合哈希
 │   ├── lexicon/                      随仓库分发的词库（THUOCL MIT + custom.txt）
-│   ├── tests/                        Python 单测（unittest，75 条）
+│   ├── tests/                        Python 单测（unittest，102 条）
 │   ├── audio_utils.py                自己解码音频（绕开 PyAV 版本坑）
 │   ├── state.py                      sha256 去重
 │   ├── writer.py                     原子写 JSON / Markdown
@@ -87,6 +89,9 @@ local_voice_sync/
 ├── Me_Notes/
 │   ├── .incoming/           ← 录音中的半截文件（同步忽略）
 │   ├── outbox/              ← 手机 → Mac
+│   │   ├── memo_*.m4a       ← 录音
+│   │   ├── memo_*.txt       ← 文本随手记（也是编辑后覆盖的那份）
+│   │   └── memo_*.meta.json ← 只在用户改过标签时出现（见第三节第 10 条）
 │   └── inbox/               ← Mac → 手机
 ├── Dad_Notes/  Mom_Notes/  <自定义>_Notes/
 ├── todos/                       ← 待办勾选状态 + 手工待办（每台设备各写一份）
@@ -137,6 +142,10 @@ flutter run -d <device>
 「待办」是独立页面，把**所有笔记里提炼出的待办**汇总到一处，也能脱离笔记单独新建；
 已完成的默认折叠在未完成列表下方，点一下标题栏展开。
 勾选状态和手工待办会通过 `todos/` 目录与 Mac、其他手机同步（见第三节第 9 条）。
+
+**文本笔记可以编辑**：详情页右上角的铅笔，能改正文（含往后追加内容）、
+加删标签；保存后自动同步给电脑重新提炼，不用手动"上传"。
+语音笔记没有这个入口——正文是转写结果，改了就不真实了（见第三节第 10 条）。
 
 > 国内网络下载模型慢：`HF_ENDPOINT=https://hf-mirror.com ./tool/fetch_embedding_model.sh`
 
@@ -651,6 +660,66 @@ Mac 端是**只读**的：`todo_state.py` 按同样的 key 规则合并状态，
 已完成 0 条
 ```
 
+### 10. 编辑文本笔记：正文走文件，标签走旁车
+
+详情页对**文本笔记**给一个编辑入口，可以改正文（包括往后追加内容）和标签；
+语音笔记没有入口——它的正文是 Whisper 的转写结果，改了就不真实了，
+音频本身也没法编辑。
+
+改完不需要点"上传"：正文写回 `outbox/<id>.txt`，Syncthing 送到 Mac，
+内容变了 → sha256 变了 → 自动重跑一次提炼，几十秒后摘要/知识点/待办刷新。
+
+**标签为什么单独一个文件。** 两个坑绕不过去：
+
+1. Mac 用内容 sha256 去重。**只改标签、正文一个字没动**时哈希不变，
+   `already_done()` 会判定"处理过了"直接跳过——用户改的标签永远到不了 Mac。
+2. 标签也不能塞进正文。正文会被 Mac 原样当作转写喂给模型，
+   任何元数据都会污染 `raw_transcript`。
+
+所以标签写进并排的旁车 `<id>.meta.json`：
+
+```json
+{
+  "id": "memo_20261031_123000",
+  "tags": ["手语", "无障碍"],
+  "tags_edited": true,
+  "edited_at": "2026-11-15 15:30:00"
+}
+```
+
+Mac 端配套三件事（`note_meta.py`）：
+
+- **组合哈希**：去重键改成 `sha256(正文) + sha256(旁车)`。旁车一变就重跑。
+  ⚠️ 没有旁车时**必须原样返回正文的 sha256**，否则升级后所有历史音频的
+  哈希都变了，启动时的积压扫描会把整个 outbox 重跑一遍。
+- **旁车映射回正文**：旁车是 `.json`，`build_job()` 不认、watchdog 也会
+  当无关文件丢掉。所以监听与积压扫描都把它映射成同名 `.txt` 再提交；
+  而且旁车事件**不做 3 秒去抖**——正文先到、旁车晚一秒到的话，会被去抖窗口
+  吞掉，用户改的标签要等下次再改才生效。
+- **用户标签优先**：`tags_edited: true` 时最终 `tags` 就是用户写的那些
+  （仍过一遍 `TagRegistry.resolve_user`，把「手语识别」并回已有的「手语」，
+  免得又长出同义变体），AI 的标签**整个丢弃**——不是参考，是不采信。
+  用户明确新建的主题不占「每篇最多新建 1 个」的名额。Ollama 挂了也照样生效。
+
+几个边界：
+
+- **空标签列表也算用户决定**：把标签全删了，AI 不会好心补回来。
+- **标签一旦手改就由用户接管**，之后改正文重新提炼也会保留。
+  想把标签交回 AI：详情页（`status == failed` 时）的「重新提炼」会写一份
+  `tags_edited: false` 的旁车，哈希变化照样触发重跑，标签重新由模型判断。
+- 写入顺序是 **正文 → 旁车 → 本地库**。文件写失败就直接报保存失败，
+  绝不假装成功；本地库先按用户写的内容显示，状态回到「待处理」。
+
+临时同步根 + 真实 Ollama 实跑（`main.py --file`，除标注外都不加 `--force`）：
+
+| 场景 | 结果 |
+| --- | --- |
+| 首次，无旁车 | AI 给出 `手语 / 学习 / 小北` |
+| 只加旁车，正文未动 | **自动重跑**，日志「采用用户标签」，产物 `手语 / 无障碍 / 小北` |
+| 正文追加一句 | 自动重跑，标签保持，新待办「买助听器电池」被提取 |
+| 原样再跑一次 | 跳过（去重仍然有效） |
+| 空旁车 `tags_edited:false` | 标签交回 AI |
+
 ---
 
 ## 四、同步契约
@@ -704,6 +773,10 @@ APK 就能看到纠错效果。原始 ASR 输出另存 `original_transcript`（�
 `tags` 一律取自现有标签词表（见第三节第 8 条），被合并掉的旧写法补进
 `aliases`；执行过标签整理的笔记额外带 `original_tags`，记录整理前的标签，
 便于回退。这些都是客户端会忽略的附加字段。
+
+**被手机编辑过的文本笔记**（`outbox/<id>.meta.json` 里 `tags_edited: true`）
+例外：`tags` 就是用户在 App 里写的那一份，AI 不再参与，JSON 里还会多一个
+`edited_at` 记录编辑时间（见第三节第 10 条）。
 
 同时写一份人类可读的 `<id>.md`。失败时写 `<id>.error.json`，手机端把记录标成「失败」。
 
@@ -762,6 +835,10 @@ Mac 端若 Ollama 挂了，会进入**降级模式**：只回传原始转写 + �
 
 ## 七、已知限制（v0.1 范围外）
 
+- **语音笔记不可编辑**。它的正文是 Whisper 转写，改了就不真实；音频也没法编辑。
+- **标签一旦手改就由用户接管**，想交回 AI 需要在详情页点「重新提炼」。
+- **编辑后要等 Mac 提炼完才会更新摘要/知识点/待办**（通常几十秒）。这期间
+  列表上那条记录显示「待处理」，正文和标签已经按用户写的显示。
 - **待办勾选按设备时钟做 last-write-wins**，不是 CRDT。两台手机时钟差得离谱、
   又在同一秒勾同一条时，以时间戳大的为准；日常使用不会遇到，但没有冲突提示 UI。
 - **iOS 无法后台常驻 Syncthing**，需第三方 App 配合。
@@ -779,7 +856,7 @@ Mac 端若 Ollama 挂了，会进入**降级模式**：只回传原始转写 + �
 
 ```bash
 flutter analyze                     # 静态检查（当前 0 issue）
-flutter test                        # 71 个单测
+flutter test                        # 78 个单测
 
 # 没有 Xcode / Android SDK 时，用它做真正的 Dart 编译验证（含资产打包）：
 flutter build bundle --target-platform=darwin
@@ -797,7 +874,7 @@ cd mac_processor
 ./run.sh --normalize-tags           # 预览已有标签的合并方案（不写文件）
 ./run.sh --normalize-tags --apply   # 备份后写回，统一标签名
 
-# Python 单测（词表预算 / 词典纠错 / LLM 护栏 / 标签归并 / 待办状态，共 75 条）
+# Python 单测（词表预算 / 词典纠错 / LLM 护栏 / 标签归并 / 待办 / 编辑旁车，共 102 条）
 .venv/bin/python -m unittest discover -s tests -t . -v
 
 # 本地出升级包：versionCode 必须大于手机上已装的（见 1.6）

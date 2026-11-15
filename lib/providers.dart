@@ -235,6 +235,52 @@ class MemoListNotifier extends AsyncNotifier<List<Memo>> {
     return memo;
   }
 
+  /// 保存文本笔记的编辑（正文 / 标签），并把它重新推给 Mac 提炼。
+  ///
+  /// 返回 null 表示**文件都没写成功**（真失败）；返回的 memo 可能
+  /// `status == local`，表示已排队等 Mac 处理。
+  Future<Memo?> saveEdit({
+    required Memo memo,
+    required String content,
+    required List<String> tags,
+    required bool tagsEdited,
+  }) async {
+    final services = ref.read(servicesProvider);
+    try {
+      final result = await services.memoEdit.save(
+        memo: memo,
+        content: content,
+        tags: tags,
+        tagsEdited: tagsEdited,
+      );
+      if (result.indexError != null) {
+        ref
+            .read(lastErrorProvider.notifier)
+            .set('编辑已保存，但向量重算失败：${result.indexError}');
+      }
+      await refresh();
+      return result.memo;
+    } on Object catch (error) {
+      AppLog.e('edit', '保存编辑失败：$error');
+      ref.read(lastErrorProvider.notifier).set('保存失败：$error');
+      return null;
+    }
+  }
+
+  /// 手动重新提交一条文本笔记（Mac 处理失败、或想再提炼一次）。
+  Future<Memo?> resubmitEdit(Memo memo) async {
+    final services = ref.read(servicesProvider);
+    try {
+      final result = await services.memoEdit.resubmit(memo);
+      await refresh();
+      return result.memo;
+    } on Object catch (error) {
+      AppLog.e('edit', '重新提交失败：$error');
+      ref.read(lastErrorProvider.notifier).set('重新提交失败：$error');
+      return null;
+    }
+  }
+
   Future<void> toggleTodo(String memoId, int index, bool completed) async {
     final services = ref.read(servicesProvider);
     final memo = await services.database.memoById(memoId);

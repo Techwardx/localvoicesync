@@ -33,6 +33,10 @@ LOGGER = logging.getLogger("lvs.tags")
 _TTL_SECONDS = 45.0
 _MAX_TAG_LEN = 24
 
+# 用户手写标签的上限。和 Dart 端 AppConfig.maxUserTags、note_meta.MAX_USER_TAGS
+# 保持一致——三处对不上时，手机上删掉的标签会被 Mac 补回来。
+MAX_USER_TAGS = 8
+
 # 这些词太泛，一旦成为「短标签」就会把无数不相干的标签吞掉
 # （"数据" 会吃掉 "无障碍数据集"，"设计" 会吃掉 "无障碍设计"）。
 # 它们可以正常作为标签存在，但不参与「包含关系」归并。
@@ -301,6 +305,36 @@ class TagRegistry:
                 variants.append(text)
 
         return TagResolution(tags[:6], mapped, created, variants)
+
+    def resolve_user(self, tags: Iterable[str]) -> list[str]:
+        """把**用户手写**的标签收敛成最终列表。
+
+        和 :meth:`resolve` 的区别只有一条：**用户说了算**。
+
+        * 命中已有标签（精确 / 包含关系）就沿用已有写法——用户打「手语识别」
+          而库里已有「手语」时仍然并过去，否则又会重新长出同义变体；
+        * 没命中就原样保留，**不占**「每篇最多新建 N 个」的名额。用户明确
+          新建一个主题，不该被 `LVS_TAG_MAX_NEW=1` 挡掉；
+        * 数量上限是 :data:`MAX_USER_TAGS`，不是 AI 那套 6 个。
+        """
+        result: list[str] = []
+        seen: set[str] = set()
+        for raw in tags:
+            text = str(raw).strip()
+            if not text or len(text) > _MAX_TAG_LEN:
+                continue
+            key = normalize_tag(text)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+
+            hit = self.lookup(text)
+            final = hit if hit is not None else text
+            if final not in result:
+                result.append(final)
+            if len(result) >= MAX_USER_TAGS:
+                break
+        return result
 
 
 # ---------------------------------------------------------------- 目录遍历

@@ -146,12 +146,13 @@ class _MemoDetailPageState extends ConsumerState<MemoDetailPage> {
         actions: [
           // 只有文本笔记可编辑：语音的正文是转写结果，改它就不真实了。
           if (memo != null && memo.kind == MemoKind.text) ...[
-            if (memo.status == MemoStatus.failed)
-              IconButton(
-                tooltip: '重新提炼',
-                onPressed: _resubmit,
-                icon: const Icon(Icons.refresh, size: 20),
-              ),
+            // 始终给一个「重新提炼」：处理失败时是重试，正常时是"让 AI 重新
+            // 判断标签"（用户手改过标签后后悔了，这是唯一的退路）。
+            IconButton(
+              tooltip: '重新提炼',
+              onPressed: _resubmit,
+              icon: const Icon(Icons.refresh, size: 20),
+            ),
             IconButton(
               tooltip: '编辑正文与标签',
               onPressed: _openEditor,

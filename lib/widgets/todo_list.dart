@@ -57,7 +57,7 @@ class _TodoRow extends StatelessWidget {
     return InkWell(
       onTap: () => onChanged(!todo.completed),
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: AppSpace.sm),
+        padding: const EdgeInsets.symmetric(vertical: AppSpace.sm + 2),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [

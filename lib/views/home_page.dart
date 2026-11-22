@@ -218,26 +218,21 @@ class _HomePageState extends ConsumerState<HomePage> {
                     )
                   else ...[
                     const SizedBox(height: AppSpace.xxl),
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: AppSpace.xs),
-                      child: Row(
-                        children: [
-                          Text('最近', style: AppType.section),
-                          const SizedBox(width: AppSpace.sm),
-                          Text('${list.length}', style: AppTheme.mono),
-                        ],
-                      ),
+                    Row(
+                      children: [
+                        Text('最近', style: AppType.section),
+                        const SizedBox(width: AppSpace.sm),
+                        Text('${list.length}', style: AppTheme.mono),
+                      ],
                     ),
-                    const Divider(height: 1),
+                    const SizedBox(height: AppSpace.md),
                     for (final memo in list)
-                      Column(
-                        children: [
-                          MemoCard(
-                            memo: memo,
-                            onTap: () => _openDetail(memo),
-                          ),
-                          const Divider(height: 1),
-                        ],
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: AppSpace.panelGap),
+                        child: MemoCard(
+                          memo: memo,
+                          onTap: () => _openDetail(memo),
+                        ),
                       ),
                   ],
                 ],

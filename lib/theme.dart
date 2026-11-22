@@ -14,14 +14,15 @@ class AppTheme {
   const AppTheme._();
 
   // ── 基底：月白 / 青白 ───────────────────────────────────────────
-  /// 月白：页面底色，极淡的冷白，带一丝青意。
-  static const Color background = Color(0xFFF5F7F5);
+  /// 月白：页面底色，比面层略沉一档的冷白，让面板能轻轻浮出来。
+  /// 上一版底色与面层几乎同色，卡片失去边界、成了"毛坯房"，这里拉开半档。
+  static const Color background = Color(0xFFEFF3F0);
 
-  /// 青白：瓷白卡片面，比底色略亮，接近白但不是纯白。
-  static const Color surface = Color(0xFFFBFCFB);
+  /// 青白：瓷白面板面，接近白但不是纯白，与底色形成克制的明度层次。
+  static const Color surface = Color(0xFFFCFDFC);
 
-  /// 比 surface 更沉一档的浅青，用于选中态底、引用块。
-  static const Color surfaceSoft = Color(0xFFEFF4F1);
+  /// 比 surface 更沉一档的浅青，用于选中态底、引用块、次级承托面。
+  static const Color surfaceSoft = Color(0xFFE7EFEA);
 
   // ── 文字：墨 / 墨灰 ─────────────────────────────────────────────
   /// 墨：正文与标题，非纯黑。
@@ -61,6 +62,22 @@ class AppTheme {
 
   /// 未配置 / 连接中：淡墨灰。
   static const Color idleDot = Color(0xFFAFB6B1);
+
+  /// 统一的"面板"装饰：浅面 + 0.8px 细边 + 圆角，无阴影、无渐变。
+  ///
+  /// 这是找回来的那层"骨架"——内容落在有边界的面上，靠明度与细线承托，
+  /// 而不是满屏无边界的纯文字，也不回到厚阴影/重描边。
+  static BoxDecoration panel({
+    Color? color,
+    double radius = AppSpace.radiusCard,
+    Color? borderColor,
+  }) {
+    return BoxDecoration(
+      color: color ?? surface,
+      borderRadius: BorderRadius.circular(radius),
+      border: Border.all(color: borderColor ?? hairline, width: 0.8),
+    );
+  }
 
   static ThemeData light() {
     final scheme = ColorScheme.fromSeed(
@@ -313,6 +330,13 @@ class AppType {
     color: AppTheme.muted,
   );
 
+  /// 长文阅读：行高拉到 1.9，让整段笔记读起来有呼吸、不糊成一片。
+  static const TextStyle reading = TextStyle(
+    fontSize: 14.5,
+    height: 1.9,
+    color: AppTheme.ink,
+  );
+
   /// 分组小标题：靠字重与字距，不靠颜色块。
   static const TextStyle section = TextStyle(
     fontSize: 12,
@@ -349,8 +373,11 @@ class AppSpace {
   static const double xxl = 24;
   static const double xxxl = 32;
 
-  /// 页面左右安全留白。
-  static const double pageInset = 20;
+  /// 页面左右安全留白。回调后加大到 24，给列表卡片更多呼吸。
+  static const double pageInset = 24;
+
+  /// 面板与面板之间的间距。
+  static const double panelGap = 12;
 
   static const double radiusChip = 8;
   static const double radiusField = 12;

@@ -69,8 +69,8 @@ class _SearchPageState extends ConsumerState<SearchPage> {
               ),
             ),
           ),
-          // 模式切换做成轻量的文字标签：靠字重与一条细下划线表示选中，
-          // 不再用 SegmentedButton 那种三层描边的重控件。
+          // 模式切换放在一条浅色承托条上：文字标签 + 细下划线表示选中，
+          // 既有分组骨架，又不回到 SegmentedButton 那种三层描边的重控件。
           Padding(
             padding: const EdgeInsets.fromLTRB(
               AppSpace.pageInset,
@@ -78,19 +78,27 @@ class _SearchPageState extends ConsumerState<SearchPage> {
               AppSpace.pageInset,
               0,
             ),
-            child: Row(
-              children: [
-                for (final mode in SearchMode.values)
-                  _ModeTab(
-                    label: switch (mode) {
-                      SearchMode.auto => '混合',
-                      SearchMode.keyword => '关键词',
-                      SearchMode.semantic => '语义',
-                    },
-                    selected: search.mode == mode,
-                    onTap: () => notifier.setMode(mode),
-                  ),
-              ],
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(
+                horizontal: AppSpace.md,
+                vertical: AppSpace.xs,
+              ),
+              decoration: AppTheme.panel(),
+              child: Row(
+                children: [
+                  for (final mode in SearchMode.values)
+                    _ModeTab(
+                      label: switch (mode) {
+                        SearchMode.auto => '混合',
+                        SearchMode.keyword => '关键词',
+                        SearchMode.semantic => '语义',
+                      },
+                      selected: search.mode == mode,
+                      onTap: () => notifier.setMode(mode),
+                    ),
+                ],
+              ),
             ),
           ),
           if (!embedding.isReady)
@@ -174,18 +182,16 @@ class _Results extends ConsumerWidget {
       itemCount: state.hits.length,
       itemBuilder: (context, index) {
         final hit = state.hits[index];
-        return Column(
-          children: [
-            MemoCard(
-              memo: hit.memo,
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => MemoDetailPage(memoId: hit.memo.id),
-                ),
+        return Padding(
+          padding: const EdgeInsets.only(bottom: AppSpace.panelGap),
+          child: MemoCard(
+            memo: hit.memo,
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => MemoDetailPage(memoId: hit.memo.id),
               ),
             ),
-            const Divider(height: 1),
-          ],
+          ),
         );
       },
     );
@@ -332,7 +338,8 @@ class _ModeTab extends StatelessWidget {
   }
 }
 
-/// 单个标签：文字 + 极淡下划线，点选时浅青一闪，不再做成按钮。
+/// 单个标签：轻量描边小片，浅面 + 细边，能看出是一个可点的独立项，
+/// 但绝不做成重色按钮，也不抢搜索框的注意力。
 class _TagChip extends StatelessWidget {
   const _TagChip({
     required this.label,
@@ -346,26 +353,33 @@ class _TagChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 3),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              label,
-              style: const TextStyle(
-                fontSize: 13,
-                color: AppTheme.ink,
-                decoration: TextDecoration.underline,
-                decorationColor: AppTheme.hairline,
-                decorationThickness: 1,
+    return Material(
+      color: AppTheme.surface,
+      borderRadius: BorderRadius.circular(AppSpace.radiusChip),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(AppSpace.radiusChip),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpace.md,
+            vertical: AppSpace.sm,
+          ),
+          decoration: AppTheme.panel(radius: AppSpace.radiusChip),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 12.5,
+                  color: AppTheme.ink,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
-            ),
-            const SizedBox(width: 4),
-            Text('$count', style: AppTheme.mono),
-          ],
+              const SizedBox(width: 6),
+              Text('$count', style: AppTheme.mono),
+            ],
+          ),
         ),
       ),
     );

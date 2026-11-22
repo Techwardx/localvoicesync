@@ -198,7 +198,7 @@ class _MemoDetailPageState extends ConsumerState<MemoDetailPage> {
                         .audioFile(memo.authorDir, memo.audioFilename!)
                         .path,
                   ),
-                  const SizedBox(height: AppSpace.xxl),
+                  const SizedBox(height: AppSpace.lg),
                 ],
                 if (memo.summary.trim().isNotEmpty) ...[
                   _SectionCard(
@@ -209,7 +209,7 @@ class _MemoDetailPageState extends ConsumerState<MemoDetailPage> {
                       styleSheet: _markdownStyle,
                     ),
                   ),
-                  const SizedBox(height: AppSpace.xxl),
+                  const SizedBox(height: AppSpace.lg),
                 ],
                 if (memo.knowledgePoints.isNotEmpty) ...[
                   _SectionCard(
@@ -217,32 +217,29 @@ class _MemoDetailPageState extends ConsumerState<MemoDetailPage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        for (final point in memo.knowledgePoints)
+                        for (var i = 0; i < memo.knowledgePoints.length; i++)
                           Padding(
-                            padding: const EdgeInsets.only(bottom: 8),
+                            padding: EdgeInsets.only(
+                              bottom: i == memo.knowledgePoints.length - 1
+                                  ? 0
+                                  : AppSpace.md + 2,
+                            ),
                             child: Row(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Padding(
-                                  padding: EdgeInsets.only(top: 6, right: 8),
-                                  child: SizedBox(
-                                    width: 4,
-                                    height: 4,
-                                    child: DecoratedBox(
-                                      decoration: BoxDecoration(
-                                        color: AppTheme.primary,
-                                        shape: BoxShape.circle,
-                                      ),
-                                    ),
+                                Container(
+                                  margin: const EdgeInsets.only(top: 9, right: AppSpace.md),
+                                  width: 5,
+                                  height: 5,
+                                  decoration: const BoxDecoration(
+                                    color: AppTheme.primaryMid,
+                                    shape: BoxShape.circle,
                                   ),
                                 ),
                                 Expanded(
                                   child: Text(
-                                    point,
-                                    style: const TextStyle(
-                                      fontSize: 14,
-                                      height: 1.65,
-                                    ),
+                                    memo.knowledgePoints[i],
+                                    style: AppType.reading,
                                   ),
                                 ),
                               ],
@@ -251,7 +248,7 @@ class _MemoDetailPageState extends ConsumerState<MemoDetailPage> {
                       ],
                     ),
                   ),
-                  const SizedBox(height: AppSpace.xxl),
+                  const SizedBox(height: AppSpace.lg),
                 ],
                 if (memo.todos.isNotEmpty) ...[
                   _SectionCard(
@@ -262,7 +259,7 @@ class _MemoDetailPageState extends ConsumerState<MemoDetailPage> {
                           unawaited(_toggleTodo(index, value)),
                     ),
                   ),
-                  const SizedBox(height: AppSpace.xxl),
+                  const SizedBox(height: AppSpace.lg),
                 ],
                 if (memo.tags.isNotEmpty) ...[
                   _SectionCard(
@@ -276,7 +273,7 @@ class _MemoDetailPageState extends ConsumerState<MemoDetailPage> {
                       ),
                     ),
                   ),
-                  const SizedBox(height: AppSpace.xxl),
+                  const SizedBox(height: AppSpace.lg),
                 ],
                 if (memo.rawText.trim().isNotEmpty)
                   _SectionCard(
@@ -316,11 +313,7 @@ class _MemoDetailPageState extends ConsumerState<MemoDetailPage> {
                                 !_transcriptExpanded)
                             ? TextOverflow.ellipsis
                             : TextOverflow.clip,
-                        style: const TextStyle(
-                          fontSize: 13.5,
-                          height: 1.85,
-                          color: AppTheme.muted,
-                        ),
+                        style: AppType.reading,
                       ),
                     ),
                   ),
@@ -422,6 +415,8 @@ class _MetaRow extends StatelessWidget {
 
 /// 安静的分区：靠小标题与留白分段，正文直接落在纸面上，
 /// 不再用带描边的卡片把每一段内容都框起来。
+/// 阅读分区：一块浅色面板 + 一条标题下细线托住内容，
+/// 让长笔记在视觉上有分段与承托，读起来不糊成一片纯文字。
 class _SectionCard extends StatelessWidget {
   const _SectionCard({
     required this.title,
@@ -435,18 +430,32 @@ class _SectionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Expanded(child: Text(title, style: AppType.section)),
-            ?trailing,
-          ],
-        ),
-        const SizedBox(height: AppSpace.md),
-        child,
-      ],
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(
+        AppSpace.lg,
+        AppSpace.md + 2,
+        AppSpace.lg,
+        AppSpace.lg,
+      ),
+      decoration: AppTheme.panel(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(child: Text(title, style: AppType.section)),
+              ?trailing,
+            ],
+          ),
+          const Padding(
+            padding: EdgeInsets.only(top: AppSpace.md),
+            child: Divider(height: 1),
+          ),
+          const SizedBox(height: AppSpace.md + 2),
+          child,
+        ],
+      ),
     );
   }
 }
@@ -519,13 +528,13 @@ class _AudioBarState extends State<_AudioBar> {
         .toDouble();
 
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: AppSpace.sm),
-      decoration: const BoxDecoration(
-        border: Border(
-          top: BorderSide(color: AppTheme.hairline, width: 0.8),
-          bottom: BorderSide(color: AppTheme.hairline, width: 0.8),
-        ),
+      padding: const EdgeInsets.fromLTRB(
+        AppSpace.sm,
+        AppSpace.sm,
+        AppSpace.md,
+        AppSpace.sm,
       ),
+      decoration: AppTheme.panel(),
       child: Row(
         children: [
           IconButton(

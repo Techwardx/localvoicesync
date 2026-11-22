@@ -140,21 +140,24 @@ class _TodoPageState extends ConsumerState<TodoPage> {
                 ),
                 const SizedBox(height: AppSpace.xxl),
                 _SectionHeader(title: '未完成', count: groups.pending.length),
-                const Divider(height: 1),
+                const SizedBox(height: AppSpace.sm),
                 if (groups.pending.isEmpty)
                   const _EmptyHint(
                     text: '还没有待办。\n笔记里被提炼出来的事项会自动出现在这里，\n也可以直接在上方手动添加。',
                   )
                 else
                   for (final entry in groups.pending)
-                    _TodoTile(
-                      entry: entry,
-                      timeFormat: _shortTime,
-                      onChanged: (value) => unawaited(
-                        ref.read(todoListProvider.notifier).toggle(entry, value),
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: AppSpace.panelGap),
+                      child: _TodoTile(
+                        entry: entry,
+                        timeFormat: _shortTime,
+                        onChanged: (value) => unawaited(
+                          ref.read(todoListProvider.notifier).toggle(entry, value),
+                        ),
+                        onDelete: () => unawaited(_delete(entry)),
+                        onOpen: () => _openMemo(entry),
                       ),
-                      onDelete: () => unawaited(_delete(entry)),
-                      onOpen: () => _openMemo(entry),
                     ),
                 const SizedBox(height: AppSpace.xxl),
                 // 已完成永远排在未完成下面，且默认折叠。
@@ -201,7 +204,7 @@ class _TodoPageState extends ConsumerState<TodoPage> {
   }
 }
 
-/// 手工新增待办的输入条：一条细线 + 输入框，不再套一整张卡。
+/// 手工新增待办的输入条：一块浅色面板，与下方列表项同一套承托。
 class _Composer extends StatelessWidget {
   const _Composer({
     required this.controller,
@@ -216,12 +219,11 @@ class _Composer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: AppSpace.sm),
-      decoration: const BoxDecoration(
-        border: Border(
-          bottom: BorderSide(color: AppTheme.hairline, width: 0.8),
-        ),
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpace.md,
+        vertical: AppSpace.sm + 2,
       ),
+      decoration: AppTheme.panel(),
       child: Row(
         children: [
           Icon(Icons.add, size: 19, color: AppTheme.primary),
@@ -301,8 +303,13 @@ class _EmptyHint extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 36),
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpace.lg,
+        vertical: AppSpace.xxl,
+      ),
+      decoration: AppTheme.panel(),
       child: Text(
         text,
         textAlign: TextAlign.center,
@@ -337,10 +344,7 @@ class _CompletedSection extends StatelessWidget {
             padding: const EdgeInsets.symmetric(vertical: AppSpace.md),
             child: Row(
               children: [
-                Text(
-                  '已完成',
-                  style: AppType.section,
-                ),
+                Text('已完成', style: AppType.section),
                 const SizedBox(width: AppSpace.sm),
                 Text('$count', style: AppTheme.mono),
                 const Spacer(),
@@ -354,7 +358,7 @@ class _CompletedSection extends StatelessWidget {
           ),
         ),
         if (expanded && count > 0) ...[
-          const Divider(height: 1),
+          const SizedBox(height: AppSpace.xs),
           ...children,
         ],
       ],
@@ -389,18 +393,20 @@ class _TodoTile extends StatelessWidget {
       timeFormat.format(entry.createdAt),
     ].join(' · ');
 
-    return Container(
-      decoration: const BoxDecoration(
-        border: Border(
-          bottom: BorderSide(color: AppTheme.hairline, width: 0.8),
-        ),
-      ),
+    return Material(
+      color: entry.completed ? AppTheme.background : AppTheme.surface,
+      borderRadius: BorderRadius.circular(AppSpace.radiusCard),
       child: InkWell(
+        borderRadius: BorderRadius.circular(AppSpace.radiusCard),
         onTap: entry.fromNote ? onOpen : null,
-        child: Padding(
+        child: Container(
+          width: double.infinity,
           padding: const EdgeInsets.symmetric(
-            vertical: AppSpace.md,
-            horizontal: 2,
+            vertical: AppSpace.md + 2,
+            horizontal: AppSpace.md,
+          ),
+          decoration: AppTheme.panel(
+            color: entry.completed ? AppTheme.background : null,
           ),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,

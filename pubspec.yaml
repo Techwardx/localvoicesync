@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 0.1.13+14
+version: 0.1.14+15
 
 environment:
   sdk: ^3.10.7
@@ -81,6 +81,16 @@ flutter:
   # 模型缺失时 App 不会崩，会自动降级成纯关键词检索。
   assets:
     - assets/models/
+    # OFL 要求字体分发时随附许可全文，所以这份 txt 也进 APK。
+    - assets/fonts/OFL-SourceHanSerif.txt
+
+  # 大标题专用宋体：思源宋体 SC Medium（SIL OFL 1.1）。
+  # 许可全文随包放在 assets/fonts/OFL-SourceHanSerif.txt。
+  fonts:
+    - family: LvsSong
+      fonts:
+        - asset: assets/fonts/SourceHanSerifSC-Medium.otf
+          weight: 500
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

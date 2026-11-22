@@ -134,7 +134,7 @@ class AppTheme {
         titleTextStyle: const TextStyle(
           color: ink,
           fontSize: 19,
-          fontWeight: FontWeight.w600,
+          fontWeight: FontWeight.w500,
           letterSpacing: -0.2,
           height: 1.3,
           fontFamily: AppType.titleFontFamily,
@@ -302,10 +302,12 @@ class AppTheme {
 class AppType {
   const AppType._();
 
-  /// 大标题专用字体族：宋体 / 衬线，给页面标题一点书卷气。
+  /// 大标题专用字体族：内嵌的思源宋体 SC Medium（pubspec 中注册为 LvsSong）。
   /// 正文与小字仍走 ThemeData 的系统无衬线回退，不受影响。
-  static const String titleFontFamily = 'Songti SC';
+  /// 系统宋体仅作为极端情况下的兜底，不再依赖设备是否预装。
+  static const String titleFontFamily = 'LvsSong';
   static const List<String> titleFontFallback = <String>[
+    'Songti SC',
     'STSong',
     'Noto Serif CJK SC',
     'Source Han Serif SC',
@@ -314,10 +316,11 @@ class AppType {
   ];
 
   /// 页面主标题（记录 / 搜索 / 设置 / 待办）。
+  /// 字重与内嵌字体的 Medium(500) 对齐，避免合成加粗糊掉宋体笔锋。
   static const TextStyle pageTitle = TextStyle(
     fontSize: 24,
     height: 1.25,
-    fontWeight: FontWeight.w600,
+    fontWeight: FontWeight.w500,
     letterSpacing: -0.3,
     color: AppTheme.ink,
     fontFamily: titleFontFamily,

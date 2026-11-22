@@ -720,7 +720,7 @@ Mac 端配套三件事（`note_meta.py`）：
 | 原样再跑一次 | 跳过（去重仍然有效） |
 | 空旁车 `tags_edited:false` | 标签交回 AI |
 
-### 3.11 界面视觉：宋代青碧（v0.1.11 起，v0.1.12 回调，v0.1.13 微调）
+### 3.11 界面视觉：宋代青碧（v0.1.11 起，v0.1.12 回调，v0.1.13 微调，v0.1.14 内嵌宋体）
 
 App 的视觉与交互排版做过一次整体重做，去掉"模板感"，改成克制、
 留白充足的现代工具风格。所有改动**只在 Widget 与主题层**
@@ -735,6 +735,11 @@ App 的视觉与交互排版做过一次整体重做，去掉"模板感"，改�
 **v0.1.13 微调**：保持现有骨架不动，只做三处精修——底色再压半档到更有质感的
 月白/青白；页面大标题换成宋体衬线（正文、小字、卡片标题仍用原来的系统无衬线）；
 「记录」页的切换成员行显式靠左，与标题和内容共用同一条左边界。
+
+**v0.1.14 内嵌宋体**：把「思源宋体 SC Medium」直接打进 APK，不再依赖设备预装
+Songti / Noto Serif CJK。字体采用 SIL Open Font License 1.1，许可全文随包放在
+`assets/fonts/OFL-SourceHanSerif.txt`。大标题字重同步为 Medium(500)，避免合成
+加粗糊掉宋体笔锋；正文与小字仍未改动。代价是 APK 约增大 24MB。
 
 设计令牌集中在 `lib/theme.dart`，颜色常量名向后兼容：
 
@@ -756,8 +761,10 @@ App 的视觉与交互排版做过一次整体重做，去掉"模板感"，改�
   正文 / 摘要 / 分组 / 说明 / 脚注；`AppSpace` 含 `panelGap = 12` 与
   `pageInset = 24`。中文靠字号、字重、行高与留白建立层级，而非色块。
 - `AppType.titleFontFamily` / `titleFontFallback`：只给 `pageTitle` 与
-  `AppBar.titleTextStyle` 用；字体族依次为 Songti SC → STSong → Noto Serif
-  CJK SC → Source Han Serif SC → SimSun → 系统 serif。正文与小字不引用它。
+  `AppBar.titleTextStyle` 用。主字体是内嵌的 `LvsSong`（思源宋体 SC Medium，
+  `assets/fonts/SourceHanSerifSC-Medium.otf`）；后面的 Songti SC / STSong /
+  Noto Serif CJK SC / Source Han Serif SC / SimSun / 系统 serif 仅为兜底。
+  正文与小字不引用这套字体族。
 
 各页面：
 

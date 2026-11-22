@@ -164,13 +164,17 @@ class _HomePageState extends ConsumerState<HomePage> {
           ),
           // 作者是「谁在记」这一件事，做成 quietly 的文字链接即可，
           // 不再用胶囊 + 副文案占两行。
+          // Align 显式钉在左侧，和标题/内容共用同一条左边界。
           Padding(
             padding: const EdgeInsets.symmetric(
               horizontal: AppSpace.pageInset,
             ),
-            child: _AuthorLine(
-              label: settings.member.label,
-              onTap: _pickMember,
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: _AuthorLine(
+                label: settings.member.label,
+                onTap: _pickMember,
+              ),
             ),
           ),
           if (showStorageBanner)

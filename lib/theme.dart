@@ -14,12 +14,12 @@ class AppTheme {
   const AppTheme._();
 
   // ── 基底：月白 / 青白 ───────────────────────────────────────────
-  /// 月白：页面底色，比面层略沉一档的冷白，让面板能轻轻浮出来。
-  /// 上一版底色与面层几乎同色，卡片失去边界、成了"毛坯房"，这里拉开半档。
-  static const Color background = Color(0xFFEFF3F0);
+  /// 月白：页面底色，比上一版再沉半档，冷白里透一点青，避免寡淡发灰。
+  /// 仍保持与面板的明度差，让卡片有边界但不跳出画面。
+  static const Color background = Color(0xFFE8F0EA);
 
-  /// 青白：瓷白面板面，接近白但不是纯白，与底色形成克制的明度层次。
-  static const Color surface = Color(0xFFFCFDFC);
+  /// 青白：瓷白面板面，近白非纯白；随底色一起微降明度，避免面板显得过白。
+  static const Color surface = Color(0xFFF8FBF8);
 
   /// 比 surface 更沉一档的浅青，用于选中态底、引用块、次级承托面。
   static const Color surfaceSoft = Color(0xFFE7EFEA);
@@ -129,12 +129,16 @@ class AppTheme {
         scrolledUnderElevation: 0,
         centerTitle: false,
         foregroundColor: ink,
+        // AppBar 上的页面级标题（待办 / 编辑文本等）同样用宋体衬线，
+        // 字号与字重保持原样，不牵动正文、按钮与小字。
         titleTextStyle: const TextStyle(
           color: ink,
           fontSize: 19,
           fontWeight: FontWeight.w600,
           letterSpacing: -0.2,
           height: 1.3,
+          fontFamily: AppType.titleFontFamily,
+          fontFamilyFallback: AppType.titleFontFallback,
         ),
         iconTheme: const IconThemeData(color: muted, size: 21),
       ),
@@ -298,13 +302,26 @@ class AppTheme {
 class AppType {
   const AppType._();
 
-  /// 页面主标题（记录 / 搜索 / 设置）。
+  /// 大标题专用字体族：宋体 / 衬线，给页面标题一点书卷气。
+  /// 正文与小字仍走 ThemeData 的系统无衬线回退，不受影响。
+  static const String titleFontFamily = 'Songti SC';
+  static const List<String> titleFontFallback = <String>[
+    'STSong',
+    'Noto Serif CJK SC',
+    'Source Han Serif SC',
+    'SimSun',
+    'serif',
+  ];
+
+  /// 页面主标题（记录 / 搜索 / 设置 / 待办）。
   static const TextStyle pageTitle = TextStyle(
     fontSize: 24,
     height: 1.25,
     fontWeight: FontWeight.w600,
     letterSpacing: -0.3,
     color: AppTheme.ink,
+    fontFamily: titleFontFamily,
+    fontFamilyFallback: titleFontFallback,
   );
 
   /// 卡片标题 / 记录标题。

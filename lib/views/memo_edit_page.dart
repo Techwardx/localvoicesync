@@ -169,37 +169,32 @@ class _MemoEditPageState extends ConsumerState<MemoEditPage> {
           ],
         ),
         body: ListView(
-          padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
+          padding: const EdgeInsets.fromLTRB(
+            AppSpace.pageInset,
+            AppSpace.md,
+            AppSpace.pageInset,
+            40,
+          ),
           children: [
             _Hint(
-              icon: Icons.cloud_sync_outlined,
-              text: '保存后会同步到电脑重新提炼：摘要、知识点、待办都会按新内容重算，'
-                  '标签以你写的为准。',
+              text: '保存后会同步到电脑重新提炼：摘要、知识点、待办都会按新内容重算，标签以你写的为准。',
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: AppSpace.xxl),
             const _SectionLabel('正文'),
-            const SizedBox(height: 6),
-            Container(
-              decoration: BoxDecoration(
-                color: AppTheme.surface,
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: AppTheme.hairline),
-              ),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              child: TextField(
-                controller: _body,
-                minLines: 12,
-                maxLines: null,
-                keyboardType: TextInputType.multiline,
-                textInputAction: TextInputAction.newline,
-                style: const TextStyle(fontSize: 14, height: 1.8),
-                decoration: const InputDecoration(
-                  border: InputBorder.none,
-                  hintText: '写下要记的内容…',
-                ),
+            const SizedBox(height: AppSpace.sm),
+            TextField(
+              controller: _body,
+              minLines: 12,
+              maxLines: null,
+              keyboardType: TextInputType.multiline,
+              textInputAction: TextInputAction.newline,
+              style: const TextStyle(fontSize: 14.5, height: 1.85),
+              decoration: const InputDecoration(
+                hintText: '写下要记的内容…',
+                alignLabelWithHint: true,
               ),
             ),
-            const SizedBox(height: 18),
+            const SizedBox(height: AppSpace.xxl),
             Row(
               children: [
                 const Expanded(child: _SectionLabel('标签')),
@@ -227,18 +222,23 @@ class _MemoEditPageState extends ConsumerState<MemoEditPage> {
                     InputChip(
                       label: Text(tag),
                       labelStyle: const TextStyle(
-                        fontSize: 12,
+                        fontSize: 12.5,
                         color: AppTheme.primary,
                         fontWeight: FontWeight.w500,
                       ),
-                      backgroundColor: AppTheme.primarySoft,
+                      backgroundColor: AppTheme.surfaceSoft,
                       side: BorderSide.none,
-                      deleteIconColor: AppTheme.primary,
+                      deleteIconColor: AppTheme.primaryMid,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(
+                          AppSpace.radiusChip,
+                        ),
+                      ),
                       onDeleted: () => _removeTag(tag),
                     ),
                 ],
               ),
-            const SizedBox(height: 10),
+            const SizedBox(height: AppSpace.md),
             Row(
               children: [
                 Expanded(
@@ -247,38 +247,17 @@ class _MemoEditPageState extends ConsumerState<MemoEditPage> {
                     textInputAction: TextInputAction.done,
                     onSubmitted: _addTag,
                     style: const TextStyle(fontSize: 13.5),
-                    decoration: InputDecoration(
+                    decoration: const InputDecoration(
                       isDense: true,
                       hintText: '添加标签，回车确认',
-                      hintStyle: const TextStyle(
-                        fontSize: 13,
-                        color: AppTheme.muted,
-                      ),
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 11,
-                      ),
-                      filled: true,
-                      fillColor: AppTheme.surface,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
-                        borderSide: const BorderSide(color: AppTheme.hairline),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
-                        borderSide: const BorderSide(color: AppTheme.hairline),
-                      ),
                     ),
                   ),
                 ),
-                const SizedBox(width: 8),
-                IconButton.filledTonal(
+                const SizedBox(width: AppSpace.sm),
+                IconButton(
                   onPressed: () => _addTag(_tagInput.text),
                   icon: const Icon(Icons.add, size: 18),
-                  style: IconButton.styleFrom(
-                    backgroundColor: AppTheme.primarySoft,
-                    foregroundColor: AppTheme.primary,
-                  ),
+                  color: AppTheme.primary,
                 ),
               ],
             ),
@@ -296,29 +275,29 @@ class _MemoEditPageState extends ConsumerState<MemoEditPage> {
                     .toList(growable: false);
                 if (pool.isEmpty) return const SizedBox.shrink();
                 return Padding(
-                  padding: const EdgeInsets.only(top: 14),
+                  padding: const EdgeInsets.only(top: AppSpace.xxl),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text(
-                        '已有标签',
-                        style: TextStyle(fontSize: 12, color: AppTheme.muted),
-                      ),
-                      const SizedBox(height: 6),
+                      Text('已有标签', style: AppType.section),
+                      const SizedBox(height: AppSpace.sm),
                       Wrap(
-                        spacing: 6,
-                        runSpacing: 6,
+                        spacing: AppSpace.lg,
+                        runSpacing: AppSpace.sm,
                         children: [
                           for (final tag in pool)
-                            ActionChip(
-                              label: Text(tag),
-                              labelStyle: const TextStyle(
-                                fontSize: 12,
-                                color: AppTheme.muted,
+                            InkWell(
+                              onTap: () => _addTag(tag),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(vertical: 3),
+                                child: Text(
+                                  '+ $tag',
+                                  style: const TextStyle(
+                                    fontSize: 12.5,
+                                    color: AppTheme.muted,
+                                  ),
+                                ),
                               ),
-                              backgroundColor: Colors.transparent,
-                              side: const BorderSide(color: AppTheme.hairline),
-                              onPressed: () => _addTag(tag),
                             ),
                         ],
                       ),
@@ -366,49 +345,32 @@ class _SectionLabel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Text(
-      text,
-      style: TextStyle(
-        fontSize: 12,
-        fontWeight: FontWeight.w600,
-        color: AppTheme.muted.withValues(alpha: 0.95),
-        letterSpacing: 0.4,
-      ),
-    );
+    return Text(text, style: AppType.section);
   }
 }
 
+/// 一条浅淡的说明，用一条青碧细线起头，不铺色块。
 class _Hint extends StatelessWidget {
-  const _Hint({required this.icon, required this.text});
+  const _Hint({required this.text});
 
-  final IconData icon;
   final String text;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-      decoration: BoxDecoration(
-        color: AppTheme.primarySoft,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, size: 15, color: AppTheme.primary),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              text,
-              style: const TextStyle(
-                fontSize: 12,
-                height: 1.6,
-                color: AppTheme.primary,
-              ),
-            ),
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 2,
+          height: 34,
+          decoration: BoxDecoration(
+            color: AppTheme.primaryMid,
+            borderRadius: BorderRadius.circular(1),
           ),
-        ],
-      ),
+        ),
+        const SizedBox(width: AppSpace.md),
+        Expanded(child: Text(text, style: AppType.caption)),
+      ],
     );
   }
 }

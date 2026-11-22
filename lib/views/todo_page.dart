@@ -17,6 +17,9 @@ import 'memo_detail_page.dart';
 ///
 /// 已完成默认折叠在未完成下面：完成的条目会越积越多，展开铺一屏会把
 /// 真正要做的事挤到看不见的地方。
+///
+/// 视觉上：待办本体是主角，来源与时间弱化成一行浅淡小字；
+/// 同步机制的说明移到「设置 → 高级」，不占主视图。
 class TodoPage extends ConsumerStatefulWidget {
   const TodoPage({super.key});
 
@@ -123,20 +126,21 @@ class _TodoPageState extends ConsumerState<TodoPage> {
             child: ListView(
               // 内容再少也要能下拉刷新：状态文件是别的设备写的。
               physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(16, 6, 16, 48),
+              padding: const EdgeInsets.fromLTRB(
+                AppSpace.pageInset,
+                AppSpace.md,
+                AppSpace.pageInset,
+                48,
+              ),
               children: [
                 _Composer(
                   controller: _composer,
                   busy: _adding,
                   onSubmit: () => unawaited(_add()),
                 ),
-                const SizedBox(height: 18),
-                _SectionHeader(
-                  title: '未完成',
-                  count: groups.pending.length,
-                  color: AppTheme.primary,
-                ),
-                const SizedBox(height: 8),
+                const SizedBox(height: AppSpace.xxl),
+                _SectionHeader(title: '未完成', count: groups.pending.length),
+                const Divider(height: 1),
                 if (groups.pending.isEmpty)
                   const _EmptyHint(
                     text: '还没有待办。\n笔记里被提炼出来的事项会自动出现在这里，\n也可以直接在上方手动添加。',
@@ -152,7 +156,7 @@ class _TodoPageState extends ConsumerState<TodoPage> {
                       onDelete: () => unawaited(_delete(entry)),
                       onOpen: () => _openMemo(entry),
                     ),
-                const SizedBox(height: 22),
+                const SizedBox(height: AppSpace.xxl),
                 // 已完成永远排在未完成下面，且默认折叠。
                 _CompletedSection(
                   count: groups.completed.length,
@@ -174,8 +178,6 @@ class _TodoPageState extends ConsumerState<TodoPage> {
                       ),
                   ],
                 ),
-                const SizedBox(height: 18),
-                const _SyncHint(),
               ],
             ),
           );
@@ -199,7 +201,7 @@ class _TodoPageState extends ConsumerState<TodoPage> {
   }
 }
 
-/// 手工新增待办的输入条。
+/// 手工新增待办的输入条：一条细线 + 输入框，不再套一整张卡。
 class _Composer extends StatelessWidget {
   const _Composer({
     required this.controller,
@@ -214,17 +216,16 @@ class _Composer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
-      decoration: BoxDecoration(
-        color: AppTheme.surface,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.hairline),
+      padding: const EdgeInsets.symmetric(vertical: AppSpace.sm),
+      decoration: const BoxDecoration(
+        border: Border(
+          bottom: BorderSide(color: AppTheme.hairline, width: 0.8),
+        ),
       ),
       child: Row(
         children: [
-          const SizedBox(width: 8),
-          const Icon(Icons.add_task_outlined, size: 19, color: AppTheme.primary),
-          const SizedBox(width: 8),
+          Icon(Icons.add, size: 19, color: AppTheme.primary),
+          const SizedBox(width: AppSpace.md),
           Expanded(
             child: TextField(
               controller: controller,
@@ -238,30 +239,32 @@ class _Composer extends StatelessWidget {
                 enabledBorder: InputBorder.none,
                 focusedBorder: InputBorder.none,
                 filled: false,
-                contentPadding: EdgeInsets.symmetric(vertical: 10),
+                isDense: true,
+                contentPadding: EdgeInsets.symmetric(vertical: 8),
               ),
-              style: const TextStyle(fontSize: 14, color: AppTheme.ink),
+              style: const TextStyle(
+                fontSize: 14,
+                color: AppTheme.ink,
+                height: 1.5,
+              ),
             ),
           ),
-          const SizedBox(width: 4),
-          IconButton.filled(
+          const SizedBox(width: AppSpace.sm),
+          IconButton(
             onPressed: busy ? null : onSubmit,
-            style: IconButton.styleFrom(
-              backgroundColor: AppTheme.primary,
-              foregroundColor: Colors.white,
-              disabledBackgroundColor: AppTheme.hairline,
-              minimumSize: const Size(38, 38),
-            ),
             icon: busy
                 ? const SizedBox(
                     width: 14,
                     height: 14,
                     child: CircularProgressIndicator(
                       strokeWidth: 2,
-                      color: Colors.white,
+                      color: AppTheme.primary,
                     ),
                   )
-                : const Icon(Icons.add, size: 20),
+                : const Icon(Icons.arrow_upward_rounded, size: 19),
+            color: AppTheme.primary,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
             tooltip: '添加',
           ),
         ],
@@ -271,41 +274,22 @@ class _Composer extends StatelessWidget {
 }
 
 class _SectionHeader extends StatelessWidget {
-  const _SectionHeader({
-    required this.title,
-    required this.count,
-    required this.color,
-  });
+  const _SectionHeader({required this.title, required this.count});
 
   final String title;
   final int count;
-  final Color color;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Container(
-          width: 3,
-          height: 13,
-          decoration: BoxDecoration(
-            color: color,
-            borderRadius: BorderRadius.circular(2),
-          ),
-        ),
-        const SizedBox(width: 8),
-        Text(
-          title,
-          style: TextStyle(
-            fontSize: 12.5,
-            fontWeight: FontWeight.w600,
-            color: AppTheme.muted.withValues(alpha: 0.95),
-            letterSpacing: 0.4,
-          ),
-        ),
-        const SizedBox(width: 8),
-        Text('$count', style: AppTheme.mono),
-      ],
+    return Padding(
+      padding: const EdgeInsets.only(bottom: AppSpace.sm),
+      child: Row(
+        children: [
+          Text(title, style: AppType.section),
+          const SizedBox(width: AppSpace.sm),
+          Text('$count', style: AppTheme.mono),
+        ],
+      ),
     );
   }
 }
@@ -317,22 +301,12 @@ class _EmptyHint extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 26),
-      decoration: BoxDecoration(
-        color: AppTheme.surface,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.hairline),
-      ),
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 36),
       child: Text(
         text,
         textAlign: TextAlign.center,
-        style: const TextStyle(
-          fontSize: 13,
-          height: 1.9,
-          color: AppTheme.muted,
-        ),
+        style: AppType.secondary,
       ),
     );
   }
@@ -358,44 +332,29 @@ class _CompletedSection extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         InkWell(
-          borderRadius: BorderRadius.circular(8),
           onTap: count == 0 ? null : onToggle,
           child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
+            padding: const EdgeInsets.symmetric(vertical: AppSpace.md),
             child: Row(
               children: [
-                const Icon(
-                  Icons.check_circle_outline,
-                  size: 15,
-                  color: AppTheme.muted,
-                ),
-                const SizedBox(width: 8),
                 Text(
                   '已完成',
-                  style: TextStyle(
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w600,
-                    color: AppTheme.muted.withValues(alpha: 0.95),
-                  ),
+                  style: AppType.section,
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: AppSpace.sm),
                 Text('$count', style: AppTheme.mono),
                 const Spacer(),
-                Text(
-                  expanded ? '收起' : '展开',
-                  style: const TextStyle(fontSize: 12, color: AppTheme.primary),
-                ),
                 Icon(
                   expanded ? Icons.expand_less : Icons.expand_more,
                   size: 18,
-                  color: AppTheme.primary,
+                  color: AppTheme.faint,
                 ),
               ],
             ),
           ),
         ),
         if (expanded && count > 0) ...[
-          const SizedBox(height: 4),
+          const Divider(height: 1),
           ...children,
         ],
       ],
@@ -420,90 +379,88 @@ class _TodoTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 来源与时间并成一行浅淡小字：信息仍在，但不再用彩色标抢注意力。
+    final source = entry.fromNote
+        ? (entry.memoTitle.isNotEmpty ? entry.memoTitle : '来自笔记')
+        : '手动添加';
+    final meta = <String>[
+      source,
+      if (entry.author.isNotEmpty) entry.author,
+      timeFormat.format(entry.createdAt),
+    ].join(' · ');
+
     return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      decoration: BoxDecoration(
-        color: AppTheme.surface,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppTheme.hairline),
+      decoration: const BoxDecoration(
+        border: Border(
+          bottom: BorderSide(color: AppTheme.hairline, width: 0.8),
+        ),
       ),
       child: InkWell(
-        borderRadius: BorderRadius.circular(12),
         onTap: entry.fromNote ? onOpen : null,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(8, 8, 4, 8),
+          padding: const EdgeInsets.symmetric(
+            vertical: AppSpace.md,
+            horizontal: 2,
+          ),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               SizedBox(
-                width: 26,
-                height: 26,
+                width: 22,
+                height: 22,
                 child: Checkbox(
                   value: entry.completed,
                   onChanged: (value) => onChanged(value ?? false),
                   materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   visualDensity: VisualDensity.compact,
-                  side: const BorderSide(color: AppTheme.hairline, width: 1.6),
+                  side: BorderSide(color: AppTheme.hairline, width: 1.5),
                   activeColor: AppTheme.primary,
+                  fillColor: WidgetStateProperty.resolveWith<Color>((states) {
+                    if (states.contains(WidgetState.selected)) {
+                      return AppTheme.primary;
+                    }
+                    return Colors.transparent;
+                  }),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(5),
                   ),
                 ),
               ),
-              const SizedBox(width: 6),
+              const SizedBox(width: AppSpace.md),
               Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.only(top: 2, bottom: 2),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        entry.task,
-                        style: TextStyle(
-                          fontSize: 14,
-                          height: 1.5,
-                          color: entry.completed ? AppTheme.muted : AppTheme.ink,
-                          decoration: entry.completed
-                              ? TextDecoration.lineThrough
-                              : TextDecoration.none,
-                          decorationColor: AppTheme.muted,
-                        ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      entry.task,
+                      style: TextStyle(
+                        fontSize: 14.5,
+                        height: 1.5,
+                        color: entry.completed
+                            ? AppTheme.faint
+                            : AppTheme.ink,
+                        decoration: entry.completed
+                            ? TextDecoration.lineThrough
+                            : TextDecoration.none,
+                        decorationColor: AppTheme.faint,
                       ),
-                      const SizedBox(height: 5),
-                      Wrap(
-                        spacing: 6,
-                        runSpacing: 4,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
-                          _SourceChip(fromNote: entry.fromNote),
-                          if (entry.fromNote && entry.memoTitle.isNotEmpty)
-                            Text(
-                              entry.memoTitle,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontSize: 11,
-                                color: AppTheme.muted,
-                              ),
-                            ),
-                          if (entry.author.isNotEmpty)
-                            Text(entry.author, style: AppTheme.mono),
-                          Text(
-                            timeFormat.format(entry.createdAt),
-                            style: AppTheme.mono,
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      meta,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppType.footnote,
+                    ),
+                  ],
                 ),
               ),
               if (entry.fromManual)
                 IconButton(
                   tooltip: '删除这条手工待办',
                   onPressed: onDelete,
-                  icon: const Icon(Icons.close, size: 16),
-                  color: AppTheme.muted,
+                  icon: const Icon(Icons.close, size: 15),
+                  color: AppTheme.faint,
                   visualDensity: VisualDensity.compact,
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(
@@ -513,52 +470,6 @@ class _TodoTile extends StatelessWidget {
                 ),
             ],
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class _SourceChip extends StatelessWidget {
-  const _SourceChip({required this.fromNote});
-
-  final bool fromNote;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        color: fromNote ? AppTheme.primarySoft : const Color(0xFFF3EEE4),
-        borderRadius: BorderRadius.circular(5),
-      ),
-      child: Text(
-        fromNote ? '来自笔记' : '手动添加',
-        style: TextStyle(
-          fontSize: 10,
-          fontWeight: FontWeight.w600,
-          color: fromNote ? AppTheme.primary : AppTheme.accent,
-        ),
-      ),
-    );
-  }
-}
-
-/// 一句话讲清状态存在哪儿，避免用户以为"重装 App 就没了"。
-class _SyncHint extends StatelessWidget {
-  const _SyncHint();
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 2),
-      child: Text(
-        '勾选状态和手动待办保存在同步目录 todos/ 下，每台设备各写一份，'
-        'Mac 与其它手机会自动同步。下拉或点右上角可重新对账。',
-        style: TextStyle(
-          fontSize: 11,
-          height: 1.7,
-          color: AppTheme.muted.withValues(alpha: 0.8),
         ),
       ),
     );

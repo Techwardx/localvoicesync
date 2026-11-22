@@ -5,14 +5,15 @@ import '../theme.dart';
 
 /// 录音大按钮。
 ///
-/// 录音时外圈跟着实时音量呼吸——用户不用看时间也知道"它听见我了"。
+/// 录音时外圈跟着实时音量轻轻呼吸——不用看时间也知道"它听见我了"。
+/// 呼吸用青碧的柔光，不再用高饱和红色铺满底部，避免破坏素雅的基调。
 class RecordButton extends StatelessWidget {
   const RecordButton({
     super.key,
     required this.phase,
     required this.level,
     required this.onPressed,
-    this.size = 88,
+    this.size = 74,
   });
 
   final ValueNotifier<RecorderPhase> phase;
@@ -31,20 +32,21 @@ class RecordButton extends StatelessWidget {
         return ValueListenableBuilder<double>(
           valueListenable: level,
           builder: (context, amplitude, _) {
-            final halo = recording ? 6 + amplitude * 14 : 0.0;
+            // 呼吸幅度刻意压小：6~12px 足够传达"在听"，不会晃眼。
+            final halo = recording ? 5 + amplitude * 9 : 0.0;
             return AnimatedContainer(
-              duration: const Duration(milliseconds: 120),
+              duration: const Duration(milliseconds: 160),
               width: size + halo * 2,
               height: size + halo * 2,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 color: recording
-                    ? AppTheme.danger.withValues(alpha: 0.12)
+                    ? AppTheme.primarySoft
                     : Colors.transparent,
               ),
               child: Center(
                 child: Material(
-                  color: recording ? AppTheme.danger : AppTheme.primary,
+                  color: recording ? AppTheme.primary : AppTheme.primary,
                   shape: const CircleBorder(),
                   elevation: 0,
                   child: InkWell(
@@ -56,22 +58,24 @@ class RecordButton extends StatelessWidget {
                       child: Center(
                         child: saving
                             ? const SizedBox(
-                                width: 26,
-                                height: 26,
+                                width: 24,
+                                height: 24,
                                 child: CircularProgressIndicator(
-                                  strokeWidth: 2.4,
+                                  strokeWidth: 2.2,
                                   valueColor: AlwaysStoppedAnimation<Color>(
                                     Colors.white,
                                   ),
                                 ),
                               )
                             : AnimatedSwitcher(
-                                duration: const Duration(milliseconds: 160),
+                                duration: const Duration(milliseconds: 180),
                                 child: Icon(
-                                  recording ? Icons.stop_rounded : Icons.mic_none,
+                                  recording
+                                      ? Icons.stop_rounded
+                                      : Icons.mic_none,
                                   key: ValueKey<bool>(recording),
                                   color: Colors.white,
-                                  size: recording ? 34 : 38,
+                                  size: recording ? 30 : 32,
                                 ),
                               ),
                       ),

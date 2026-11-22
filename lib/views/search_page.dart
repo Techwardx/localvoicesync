@@ -35,25 +35,25 @@ class _SearchPageState extends ConsumerState<SearchPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Padding(
-            padding: EdgeInsets.fromLTRB(20, 8, 20, 10),
-            child: Text(
-              '搜索',
-              style: TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.w700,
-                letterSpacing: -0.5,
-              ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpace.pageInset,
+              AppSpace.md,
+              AppSpace.pageInset,
+              AppSpace.lg,
             ),
+            child: Text('搜索', style: AppType.pageTitle),
           ),
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpace.pageInset,
+            ),
             child: TextField(
               controller: _controller,
               onChanged: notifier.onQueryChanged,
               textInputAction: TextInputAction.search,
               onSubmitted: (_) => notifier.run(),
-              style: const TextStyle(fontSize: 15),
+              style: const TextStyle(fontSize: 14.5, height: 1.5),
               decoration: InputDecoration(
                 hintText: '记得录过，但想不起关键词…',
                 prefixIcon: const Icon(Icons.search, size: 19),
@@ -69,54 +69,41 @@ class _SearchPageState extends ConsumerState<SearchPage> {
               ),
             ),
           ),
-          const SizedBox(height: 10),
+          // 模式切换做成轻量的文字标签：靠字重与一条细下划线表示选中，
+          // 不再用 SegmentedButton 那种三层描边的重控件。
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
+            padding: const EdgeInsets.fromLTRB(
+              AppSpace.pageInset,
+              AppSpace.md,
+              AppSpace.pageInset,
+              0,
+            ),
             child: Row(
               children: [
-                Expanded(
-                  child: SegmentedButton<SearchMode>(
-                    segments: const [
-                      ButtonSegment(
-                        value: SearchMode.auto,
-                        label: Text('混合'),
-                      ),
-                      ButtonSegment(
-                        value: SearchMode.keyword,
-                        label: Text('关键词'),
-                      ),
-                      ButtonSegment(
-                        value: SearchMode.semantic,
-                        label: Text('语义'),
-                      ),
-                    ],
-                    selected: <SearchMode>{search.mode},
-                    showSelectedIcon: false,
-                    onSelectionChanged: (value) =>
-                        notifier.setMode(value.first),
-                    style: ButtonStyle(
-                      visualDensity: VisualDensity.compact,
-                      textStyle: WidgetStateProperty.all(
-                        const TextStyle(fontSize: 12),
-                      ),
-                      side: WidgetStateProperty.all(
-                        const BorderSide(color: AppTheme.hairline),
-                      ),
-                    ),
+                for (final mode in SearchMode.values)
+                  _ModeTab(
+                    label: switch (mode) {
+                      SearchMode.auto => '混合',
+                      SearchMode.keyword => '关键词',
+                      SearchMode.semantic => '语义',
+                    },
+                    selected: search.mode == mode,
+                    onTap: () => notifier.setMode(mode),
                   ),
-                ),
               ],
             ),
           ),
           if (!embedding.isReady)
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
-              child: Text(
-                embedding.message,
-                style: AppTheme.mono,
+              padding: const EdgeInsets.fromLTRB(
+                AppSpace.pageInset,
+                AppSpace.sm,
+                AppSpace.pageInset,
+                0,
               ),
+              child: Text(embedding.message, style: AppType.footnote),
             ),
-          const SizedBox(height: 8),
+          const SizedBox(height: AppSpace.sm),
           Expanded(
             child: search.loading
                 ? const Center(
@@ -178,17 +165,27 @@ class _Results extends ConsumerWidget {
     }
 
     return ListView.builder(
-      padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+      padding: const EdgeInsets.fromLTRB(
+        AppSpace.pageInset,
+        AppSpace.xs,
+        AppSpace.pageInset,
+        AppSpace.xxl,
+      ),
       itemCount: state.hits.length,
       itemBuilder: (context, index) {
         final hit = state.hits[index];
-        return MemoCard(
-          memo: hit.memo,
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => MemoDetailPage(memoId: hit.memo.id),
+        return Column(
+          children: [
+            MemoCard(
+              memo: hit.memo,
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => MemoDetailPage(memoId: hit.memo.id),
+                ),
+              ),
             ),
-          ),
+            const Divider(height: 1),
+          ],
         );
       },
     );
@@ -244,23 +241,20 @@ class _TagCloudState extends ConsumerState<_TagCloud> {
         final hidden = all.length - visible.length;
 
         return ListView(
-          padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+          padding: const EdgeInsets.fromLTRB(
+            AppSpace.pageInset,
+            AppSpace.xs,
+            AppSpace.pageInset,
+            AppSpace.xxl,
+          ),
           children: [
             Padding(
-              padding: const EdgeInsets.only(bottom: 10, left: 2),
-              child: Text(
-                '最近用过的标签',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: AppTheme.muted.withValues(alpha: 0.9),
-                  letterSpacing: 0.4,
-                ),
-              ),
+              padding: const EdgeInsets.only(bottom: AppSpace.md),
+              child: Text('最近用过的标签', style: AppType.section),
             ),
             Wrap(
-              spacing: 8,
-              runSpacing: 8,
+              spacing: AppSpace.xl - 4,
+              runSpacing: AppSpace.md,
               children: [
                 for (final entry in visible)
                   _TagChip(
@@ -289,7 +283,56 @@ class _TagCloudState extends ConsumerState<_TagCloud> {
   }
 }
 
-/// 单个标签胶囊。
+/// 模式标签：靠字重与一条细下划线表示选中，不用描边控件。
+class _ModeTab extends StatelessWidget {
+  const _ModeTab({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.only(right: AppSpace.xxl),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: AppSpace.sm),
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 13,
+                  height: 1.3,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                  color: selected ? AppTheme.primary : AppTheme.muted,
+                ),
+              ),
+            ),
+            Container(
+              height: 2,
+              width: 18,
+              decoration: BoxDecoration(
+                color: selected ? AppTheme.primary : Colors.transparent,
+                borderRadius: BorderRadius.circular(1),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 单个标签：文字 + 极淡下划线，点选时浅青一闪，不再做成按钮。
 class _TagChip extends StatelessWidget {
   const _TagChip({
     required this.label,
@@ -304,26 +347,23 @@ class _TagChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return InkWell(
-      borderRadius: BorderRadius.circular(10),
       onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: AppTheme.surface,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: AppTheme.hairline),
-        ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
               label,
               style: const TextStyle(
-                fontSize: 12.5,
-                fontWeight: FontWeight.w500,
+                fontSize: 13,
+                color: AppTheme.ink,
+                decoration: TextDecoration.underline,
+                decorationColor: AppTheme.hairline,
+                decorationThickness: 1,
               ),
             ),
-            const SizedBox(width: 5),
+            const SizedBox(width: 4),
             Text('$count', style: AppTheme.mono),
           ],
         ),
@@ -332,8 +372,7 @@ class _TagChip extends StatelessWidget {
   }
 }
 
-/// 展开/收起。刻意做成虚线感的弱样式，跟真标签区分开——
-/// 它不是一个可以拿去搜索的标签，点它会改变列表本身。
+/// 展开/收起：最弱一级，浅灰文字，与真标签明确区分。
 class _ToggleChip extends StatelessWidget {
   const _ToggleChip({
     required this.label,
@@ -348,27 +387,15 @@ class _ToggleChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return InkWell(
-      borderRadius: BorderRadius.circular(10),
       onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: AppTheme.hairline),
-        ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 15, color: AppTheme.muted),
-            const SizedBox(width: 3),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 12.5,
-                color: AppTheme.muted,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
+            Icon(icon, size: 14, color: AppTheme.faint),
+            const SizedBox(width: 2),
+            Text(label, style: AppType.footnote),
           ],
         ),
       ),

@@ -14,7 +14,7 @@ import '../widgets/record_button.dart';
 import '../widgets/status_light.dart';
 import 'memo_detail_page.dart';
 
-/// 录音主页：大按钮 + 文本快记 + 最近记录。
+/// 录音主页：随手记 + 近期记录 + 底部录音。
 class HomePage extends ConsumerStatefulWidget {
   const HomePage({super.key});
 
@@ -125,10 +125,6 @@ class _HomePageState extends ConsumerState<HomePage> {
     final settings = ref.read(settingsProvider);
     final selected = await showModalBottomSheet<FamilyMember>(
       context: context,
-      backgroundColor: AppTheme.background,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
       builder: (context) => _MemberPicker(current: settings.member),
     );
     if (selected == null || !mounted) return;
@@ -143,11 +139,8 @@ class _HomePageState extends ConsumerState<HomePage> {
     final recorder = services.recorder;
 
     // 只要 Android 上没拿到「所有文件访问」就提示。
-    //
-    // 这里**不能**再用 `syncRootNeedsPermission`（= 同步根不在共享存储上）：
-    // HyperOS 这类 ROM 允许往 `Documents/` 写文件却不需要权限，于是
-    // 同步根早就在共享存储上了、那个条件永远是 false，横幅一次都不显示 ——
-    // 而 App 实际上读不到 Syncthing 写的任何文件。
+    // 这里**不能**用 syncRootNeedsPermission：HyperOS 允许写 Documents/
+    // 却不给权限，那个条件永远 false，横幅一次都不显示。
     final showStorageBanner =
         !_storageGranted && services.needsAllFilesAccess;
 
@@ -156,43 +149,38 @@ class _HomePageState extends ConsumerState<HomePage> {
       child: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 8, 12, 4),
+            padding: const EdgeInsets.fromLTRB(
+              AppSpace.pageInset,
+              AppSpace.md,
+              AppSpace.pageInset,
+              AppSpace.sm,
+            ),
             child: Row(
               children: [
-                const Expanded(
-                  child: Text(
-                    '记录',
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: -0.5,
-                    ),
-                  ),
-                ),
+                Expanded(child: Text('记录', style: AppType.pageTitle)),
                 const StatusLight(),
               ],
             ),
           ),
+          // 作者是「谁在记」这一件事，做成 quietly 的文字链接即可，
+          // 不再用胶囊 + 副文案占两行。
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: Row(
-              children: [
-                _AuthorChip(
-                  label: settings.member.label,
-                  onTap: _pickMember,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  '录音与文字都会先存在本机',
-                  style: AppTheme.mono,
-                ),
-              ],
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpace.pageInset,
+            ),
+            child: _AuthorLine(
+              label: settings.member.label,
+              onTap: _pickMember,
             ),
           ),
-          const SizedBox(height: 8),
           if (showStorageBanner)
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
+              padding: const EdgeInsets.fromLTRB(
+                AppSpace.pageInset,
+                AppSpace.md,
+                AppSpace.pageInset,
+                0,
+              ),
               child: _StorageBanner(onGrant: _grantStorageAccess),
             ),
           Expanded(
@@ -205,19 +193,23 @@ class _HomePageState extends ConsumerState<HomePage> {
                 ),
               ),
               error: (error, _) => _EmptyState(
-                icon: Icons.warning_amber_rounded,
+                icon: Icons.warning_amber_outlined,
                 title: '读取记录失败',
                 detail: '$error',
               ),
               data: (list) => ListView(
-                padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+                padding: const EdgeInsets.fromLTRB(
+                  AppSpace.pageInset,
+                  AppSpace.md,
+                  AppSpace.pageInset,
+                  AppSpace.lg,
+                ),
                 children: [
                   _QuickNoteCard(
                     controller: _textController,
                     saving: _savingNote,
                     onSubmit: _submitText,
                   ),
-                  const SizedBox(height: 18),
                   if (list.isEmpty)
                     const _EmptyState(
                       icon: Icons.graphic_eq,
@@ -225,22 +217,27 @@ class _HomePageState extends ConsumerState<HomePage> {
                       detail: '按下方的按钮开始录音，或者在上面写一句话。\n所有内容只存在你的手机里。',
                     )
                   else ...[
+                    const SizedBox(height: AppSpace.xxl),
                     Padding(
-                      padding: const EdgeInsets.only(left: 2, bottom: 8),
-                      child: Text(
-                        '最近 ${list.length} 条',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: AppTheme.muted.withValues(alpha: 0.9),
-                          letterSpacing: 0.4,
-                        ),
+                      padding: const EdgeInsets.only(bottom: AppSpace.xs),
+                      child: Row(
+                        children: [
+                          Text('最近', style: AppType.section),
+                          const SizedBox(width: AppSpace.sm),
+                          Text('${list.length}', style: AppTheme.mono),
+                        ],
                       ),
                     ),
+                    const Divider(height: 1),
                     for (final memo in list)
-                      MemoCard(
-                        memo: memo,
-                        onTap: () => _openDetail(memo),
+                      Column(
+                        children: [
+                          MemoCard(
+                            memo: memo,
+                            onTap: () => _openDetail(memo),
+                          ),
+                          const Divider(height: 1),
+                        ],
                       ),
                   ],
                 ],
@@ -274,21 +271,29 @@ class _StorageBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
+      padding: const EdgeInsets.fromLTRB(
+        AppSpace.lg,
+        AppSpace.md,
+        AppSpace.md,
+        AppSpace.md,
+      ),
       decoration: BoxDecoration(
-        color: AppTheme.pending.withValues(alpha: 0.10),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.pending.withValues(alpha: 0.35)),
+        color: AppTheme.surface,
+        borderRadius: BorderRadius.circular(AppSpace.radiusCard),
+        border: Border.all(color: AppTheme.hairline, width: 0.8),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(
-            Icons.folder_off_outlined,
-            size: 18,
-            color: AppTheme.pending,
+          const Padding(
+            padding: EdgeInsets.only(top: 1),
+            child: Icon(
+              Icons.folder_off_outlined,
+              size: 18,
+              color: AppTheme.pending,
+            ),
           ),
-          const SizedBox(width: 10),
+          const SizedBox(width: AppSpace.md),
           const Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -297,35 +302,26 @@ class _StorageBanner extends StatelessWidget {
                   '收不到 Mac 回传的总结',
                   style: TextStyle(
                     fontSize: 13.5,
-                    fontWeight: FontWeight.w700,
+                    fontWeight: FontWeight.w600,
                     color: AppTheme.ink,
+                    height: 1.4,
                   ),
                 ),
                 SizedBox(height: 3),
                 Text(
-                  '需要授予「所有文件访问」。没有它，App 只能读到自己写的文件，'
-                  'Syncthing 回传的 json 会一直看不见。',
-                  style: TextStyle(
-                    fontSize: 12,
-                    height: 1.45,
-                    color: AppTheme.muted,
-                  ),
+                  '需要授予「所有文件访问」，否则 Syncthing 回传的 json 会一直看不见。',
+                  style: AppType.caption,
                 ),
               ],
             ),
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: AppSpace.sm),
           TextButton(
             onPressed: onGrant,
             style: TextButton.styleFrom(
-              foregroundColor: AppTheme.pending,
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
               minimumSize: Size.zero,
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              textStyle: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-              ),
             ),
             child: const Text('去授权'),
           ),
@@ -391,10 +387,15 @@ class _RecordDockState extends State<_RecordDock> {
   Widget build(BuildContext context) {
     final recording = widget.recorder.phase.value == RecorderPhase.recording;
     return Container(
-      padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
+      padding: const EdgeInsets.fromLTRB(
+        AppSpace.pageInset,
+        AppSpace.lg,
+        AppSpace.pageInset,
+        AppSpace.lg,
+      ),
       decoration: const BoxDecoration(
         color: AppTheme.background,
-        border: Border(top: BorderSide(color: AppTheme.hairline)),
+        border: Border(top: BorderSide(color: AppTheme.hairline, width: 0.8)),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -404,13 +405,14 @@ class _RecordDockState extends State<_RecordDock> {
             level: widget.recorder.level,
             onPressed: () => unawaited(widget.onToggle()),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: AppSpace.md),
           Text(
             recording ? '正在录音 $_elapsed · 点击停止' : '点击开始录音',
             style: TextStyle(
               fontSize: 12.5,
               color: recording ? AppTheme.danger : AppTheme.muted,
               fontWeight: recording ? FontWeight.w600 : FontWeight.w400,
+              height: 1.4,
             ),
           ),
         ],
@@ -433,11 +435,16 @@ class _QuickNoteCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
+      padding: const EdgeInsets.fromLTRB(
+        AppSpace.lg,
+        AppSpace.sm,
+        AppSpace.sm,
+        AppSpace.sm,
+      ),
       decoration: BoxDecoration(
         color: AppTheme.surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppTheme.hairline),
+        borderRadius: BorderRadius.circular(AppSpace.radiusCard),
+        border: Border.all(color: AppTheme.hairline, width: 0.8),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
@@ -448,7 +455,7 @@ class _QuickNoteCard extends StatelessWidget {
               minLines: 1,
               maxLines: 4,
               textInputAction: TextInputAction.newline,
-              style: const TextStyle(fontSize: 14, height: 1.5),
+              style: const TextStyle(fontSize: 14.5, height: 1.55),
               decoration: const InputDecoration(
                 hintText: '随手写点什么…',
                 filled: false,
@@ -460,7 +467,7 @@ class _QuickNoteCard extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: AppSpace.sm),
           IconButton(
             onPressed: saving ? null : () => onSubmit(),
             icon: saving
@@ -469,12 +476,13 @@ class _QuickNoteCard extends StatelessWidget {
                     height: 16,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
-                : const Icon(Icons.arrow_upward_rounded),
+                : const Icon(Icons.arrow_upward_rounded, size: 19),
             style: IconButton.styleFrom(
               backgroundColor: AppTheme.primary,
               foregroundColor: Colors.white,
-              minimumSize: const Size(34, 34),
+              minimumSize: const Size(36, 36),
               padding: EdgeInsets.zero,
+              disabledBackgroundColor: AppTheme.primarySoft,
             ),
           ),
         ],
@@ -483,8 +491,9 @@ class _QuickNoteCard extends StatelessWidget {
   }
 }
 
-class _AuthorChip extends StatelessWidget {
-  const _AuthorChip({required this.label, required this.onTap});
+/// 作者：一条带下划线的浅色文字链接，点一下切换是谁在记。
+class _AuthorLine extends StatelessWidget {
+  const _AuthorLine({required this.label, required this.onTap});
 
   final String label;
   final VoidCallback onTap;
@@ -492,38 +501,25 @@ class _AuthorChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return InkWell(
-      borderRadius: BorderRadius.circular(20),
       onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-        decoration: BoxDecoration(
-          color: AppTheme.primarySoft,
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(
-              Icons.person_outline,
-              size: 13,
-              color: AppTheme.primary,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.person_outline, size: 13, color: AppTheme.faint),
+          const SizedBox(width: 5),
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 12.5,
+              color: AppTheme.muted,
+              fontWeight: FontWeight.w500,
             ),
-            const SizedBox(width: 4),
-            Text(
-              label,
-              style: const TextStyle(
-                fontSize: 12,
-                color: AppTheme.primary,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const Icon(
-              Icons.keyboard_arrow_down,
-              size: 14,
-              color: AppTheme.primary,
-            ),
-          ],
-        ),
+          ),
+          const SizedBox(width: 2),
+          const Icon(Icons.expand_more, size: 13, color: AppTheme.faint),
+          const SizedBox(width: 8),
+          Text('切换成员', style: AppType.footnote),
+        ],
       ),
     );
   }
@@ -547,21 +543,23 @@ class _MemberPicker extends StatelessWidget {
     ];
     return SafeArea(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+        padding: const EdgeInsets.fromLTRB(
+          AppSpace.pageInset,
+          AppSpace.xxl,
+          AppSpace.pageInset,
+          AppSpace.lg,
+        ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              '这是谁的记录？',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 4),
+            Text('这是谁的记录？', style: AppType.title),
+            const SizedBox(height: AppSpace.xs),
             const Text(
               '决定文件进入哪个同步目录，家人之间互不干扰',
-              style: TextStyle(fontSize: 12, color: AppTheme.muted),
+              style: AppType.caption,
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: AppSpace.lg),
             for (final member in options)
               ListTile(
                 contentPadding: EdgeInsets.zero,
@@ -573,9 +571,9 @@ class _MemberPicker extends StatelessWidget {
                   size: 18,
                   color: member.id == current.id
                       ? AppTheme.primary
-                      : AppTheme.idleDot,
+                      : AppTheme.faint,
                 ),
-                title: Text(member.label),
+                title: Text(member.label, style: AppType.body),
                 subtitle: Text(
                   member.dirName,
                   style: AppTheme.mono,
@@ -603,35 +601,24 @@ class _EmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 40),
+      padding: const EdgeInsets.symmetric(horizontal: AppSpace.xl, vertical: 48),
       child: Column(
         children: [
-          Container(
-            width: 52,
-            height: 52,
-            decoration: const BoxDecoration(
-              color: AppTheme.primarySoft,
-              shape: BoxShape.circle,
-            ),
-            child: Icon(icon, color: AppTheme.primary, size: 24),
-          ),
-          const SizedBox(height: 14),
+          Icon(icon, color: AppTheme.faint, size: 30),
+          const SizedBox(height: AppSpace.lg),
           Text(
             title,
             style: const TextStyle(
               fontSize: 15,
               fontWeight: FontWeight.w600,
+              color: AppTheme.ink,
             ),
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: AppSpace.sm),
           Text(
             detail,
             textAlign: TextAlign.center,
-            style: const TextStyle(
-              fontSize: 12.5,
-              height: 1.6,
-              color: AppTheme.muted,
-            ),
+            style: AppType.secondary,
           ),
         ],
       ),

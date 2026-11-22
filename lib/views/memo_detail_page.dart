@@ -183,17 +183,22 @@ class _MemoDetailPageState extends ConsumerState<MemoDetailPage> {
               ),
             )
           : ListView(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 40),
+              padding: const EdgeInsets.fromLTRB(
+                AppSpace.pageInset,
+                AppSpace.lg,
+                AppSpace.pageInset,
+                40,
+              ),
               children: [
                 _MetaRow(memo: memo, format: _fullFormat),
-                const SizedBox(height: 16),
+                const SizedBox(height: AppSpace.xl),
                 if (memo.hasAudio) ...[
                   _AudioBar(
                     path: AppPaths.instance
                         .audioFile(memo.authorDir, memo.audioFilename!)
                         .path,
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: AppSpace.xxl),
                 ],
                 if (memo.summary.trim().isNotEmpty) ...[
                   _SectionCard(
@@ -204,7 +209,7 @@ class _MemoDetailPageState extends ConsumerState<MemoDetailPage> {
                       styleSheet: _markdownStyle,
                     ),
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: AppSpace.xxl),
                 ],
                 if (memo.knowledgePoints.isNotEmpty) ...[
                   _SectionCard(
@@ -246,7 +251,7 @@ class _MemoDetailPageState extends ConsumerState<MemoDetailPage> {
                       ],
                     ),
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: AppSpace.xxl),
                 ],
                 if (memo.todos.isNotEmpty) ...[
                   _SectionCard(
@@ -257,38 +262,21 @@ class _MemoDetailPageState extends ConsumerState<MemoDetailPage> {
                           unawaited(_toggleTodo(index, value)),
                     ),
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: AppSpace.xxl),
                 ],
                 if (memo.tags.isNotEmpty) ...[
                   _SectionCard(
                     title: '标签',
-                    child: Wrap(
-                      spacing: 6,
-                      runSpacing: 6,
-                      children: [
-                        for (final tag in memo.tags)
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 9,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: AppTheme.primarySoft,
-                              borderRadius: BorderRadius.circular(7),
-                            ),
-                            child: Text(
-                              tag,
-                              style: const TextStyle(
-                                fontSize: 12,
-                                color: AppTheme.primary,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ),
-                      ],
+                    child: Text(
+                      memo.tags.join('  ·  '),
+                      style: const TextStyle(
+                        fontSize: 13,
+                        height: 1.7,
+                        color: AppTheme.primary,
+                      ),
                     ),
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: AppSpace.xxl),
                 ],
                 if (memo.rawText.trim().isNotEmpty)
                   _SectionCard(
@@ -348,24 +336,39 @@ class _MemoDetailPageState extends ConsumerState<MemoDetailPage> {
   }
 
   static final MarkdownStyleSheet _markdownStyle = MarkdownStyleSheet(
-    p: const TextStyle(fontSize: 14, height: 1.75, color: AppTheme.ink),
-    h1: const TextStyle(fontSize: 19, fontWeight: FontWeight.w700, height: 1.5),
-    h2: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600, height: 1.5),
-    h3: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, height: 1.5),
+    p: const TextStyle(fontSize: 14, height: 1.8, color: AppTheme.ink),
+    h1: const TextStyle(
+      fontSize: 18,
+      fontWeight: FontWeight.w600,
+      height: 1.5,
+      color: AppTheme.ink,
+    ),
+    h2: const TextStyle(
+      fontSize: 16,
+      fontWeight: FontWeight.w600,
+      height: 1.5,
+      color: AppTheme.ink,
+    ),
+    h3: const TextStyle(
+      fontSize: 14.5,
+      fontWeight: FontWeight.w600,
+      height: 1.5,
+      color: AppTheme.ink,
+    ),
     strong: const TextStyle(fontWeight: FontWeight.w600, color: AppTheme.ink),
     code: const TextStyle(
       fontSize: 12.5,
-      backgroundColor: AppTheme.primarySoft,
+      backgroundColor: AppTheme.surfaceSoft,
       color: AppTheme.primary,
     ),
-    listBullet: const TextStyle(fontSize: 14, height: 1.75),
-    blockSpacing: 8,
+    listBullet: const TextStyle(fontSize: 14, height: 1.8),
+    blockSpacing: 10,
     codeblockDecoration: BoxDecoration(
-      color: AppTheme.primarySoft,
-      borderRadius: BorderRadius.circular(8),
+      color: AppTheme.surfaceSoft,
+      borderRadius: BorderRadius.circular(AppSpace.radiusField),
     ),
     blockquoteDecoration: const BoxDecoration(
-      border: Border(left: BorderSide(color: AppTheme.primary, width: 3)),
+      border: Border(left: BorderSide(color: AppTheme.primary, width: 2)),
     ),
   );
 }
@@ -379,49 +382,46 @@ class _MetaRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isAudio = memo.kind == MemoKind.audio;
-    return Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: isAudio ? AppTheme.primarySoft : const Color(0xFFF3EEE4),
-            borderRadius: BorderRadius.circular(7),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                isAudio ? Icons.graphic_eq : Icons.notes_rounded,
-                size: 12,
-                color: isAudio ? AppTheme.primary : AppTheme.accent,
-              ),
-              const SizedBox(width: 4),
-              Text(
-                isAudio ? '语音' : '文本',
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  color: isAudio ? AppTheme.primary : AppTheme.accent,
-                ),
-              ),
-            ],
-          ),
+        Row(
+          children: [
+            Icon(
+              isAudio ? Icons.graphic_eq : Icons.notes_rounded,
+              size: 14,
+              color: AppTheme.faint,
+            ),
+            const SizedBox(width: 6),
+            Text(isAudio ? '语音记录' : '文本记录', style: AppType.section),
+          ],
         ),
-        const SizedBox(width: 10),
-        Text(memo.author, style: AppTheme.mono),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(
-            format.format(memo.createdAt),
-            style: AppTheme.mono,
-            overflow: TextOverflow.ellipsis,
-          ),
+        const SizedBox(height: AppSpace.sm),
+        Row(
+          children: [
+            Text(
+              format.format(memo.createdAt),
+              style: AppTheme.mono,
+            ),
+            const SizedBox(width: AppSpace.sm),
+            Text('·', style: AppTheme.mono),
+            const SizedBox(width: AppSpace.sm),
+            Expanded(
+              child: Text(
+                memo.author,
+                style: AppTheme.mono,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
         ),
       ],
     );
   }
 }
 
+/// 安静的分区：靠小标题与留白分段，正文直接落在纸面上，
+/// 不再用带描边的卡片把每一段内容都框起来。
 class _SectionCard extends StatelessWidget {
   const _SectionCard({
     required this.title,
@@ -435,37 +435,18 @@ class _SectionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
-      decoration: BoxDecoration(
-        color: AppTheme.surface,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.hairline),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  title,
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: AppTheme.muted.withValues(alpha: 0.95),
-                    letterSpacing: 0.4,
-                  ),
-                ),
-              ),
-              ?trailing,
-            ],
-          ),
-          const SizedBox(height: 8),
-          child,
-        ],
-      ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(child: Text(title, style: AppType.section)),
+            ?trailing,
+          ],
+        ),
+        const SizedBox(height: AppSpace.md),
+        child,
+      ],
     );
   }
 }
@@ -526,17 +507,9 @@ class _AudioBarState extends State<_AudioBar> {
   Widget build(BuildContext context) {
     final error = _error;
     if (error != null) {
-      return Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: AppTheme.surface,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: AppTheme.hairline),
-        ),
-        child: Text(
-          error,
-          style: const TextStyle(fontSize: 12, color: AppTheme.danger),
-        ),
+      return Text(
+        error,
+        style: const TextStyle(fontSize: 12, color: AppTheme.danger),
       );
     }
 
@@ -546,11 +519,12 @@ class _AudioBarState extends State<_AudioBar> {
         .toDouble();
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(8, 8, 14, 8),
-      decoration: BoxDecoration(
-        color: AppTheme.surface,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.hairline),
+      padding: const EdgeInsets.symmetric(vertical: AppSpace.sm),
+      decoration: const BoxDecoration(
+        border: Border(
+          top: BorderSide(color: AppTheme.hairline, width: 0.8),
+          bottom: BorderSide(color: AppTheme.hairline, width: 0.8),
+        ),
       ),
       child: Row(
         children: [
@@ -567,10 +541,12 @@ class _AudioBarState extends State<_AudioBar> {
             },
             icon: Icon(
               _playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+              size: 22,
             ),
             style: IconButton.styleFrom(
               backgroundColor: AppTheme.primary,
               foregroundColor: Colors.white,
+              minimumSize: const Size(42, 42),
             ),
           ),
           Expanded(

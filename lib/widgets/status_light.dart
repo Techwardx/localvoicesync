@@ -88,25 +88,25 @@ class _StatusLightState extends ConsumerState<StatusLight>
               AnimatedBuilder(
                 animation: _pulse,
                 builder: (context, child) {
-                  final halo = 0.25 + 0.35 * _pulse.value;
+                  final halo = 0.12 + 0.18 * _pulse.value;
                   return Container(
-                    width: 9,
-                    height: 9,
+                    width: 7,
+                    height: 7,
                     decoration: BoxDecoration(
                       color: color,
                       shape: BoxShape.circle,
                       boxShadow: [
                         BoxShadow(
                           color: color.withValues(alpha: halo),
-                          blurRadius: 7,
-                          spreadRadius: 1.5,
+                          blurRadius: 5,
+                          spreadRadius: 2,
                         ),
                       ],
                     ),
                   );
                 },
               ),
-              const SizedBox(width: 7),
+              const SizedBox(width: 6),
               Text(
                 status.shortLabel,
                 style: TextStyle(

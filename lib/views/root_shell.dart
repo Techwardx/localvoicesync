@@ -92,38 +92,32 @@ class _RootShellState extends ConsumerState<RootShell>
       bottomNavigationBar: Container(
         decoration: const BoxDecoration(
           color: AppTheme.surface,
-          border: Border(top: BorderSide(color: AppTheme.hairline)),
+          border: Border(top: BorderSide(color: AppTheme.hairline, width: 0.8)),
         ),
         child: SafeArea(
           top: false,
           child: NavigationBar(
             selectedIndex: _index,
             onDestinationSelected: (value) => setState(() => _index = value),
-            height: 58,
-            backgroundColor: AppTheme.surface,
-            surfaceTintColor: Colors.transparent,
-            indicatorColor: AppTheme.primarySoft,
-            labelBehavior:
-                NavigationDestinationLabelBehavior.alwaysShow,
             destinations: const [
               NavigationDestination(
                 icon: Icon(Icons.mic_none_outlined),
-                selectedIcon: Icon(Icons.mic_none, color: AppTheme.primary),
+                selectedIcon: Icon(Icons.mic),
                 label: '记录',
               ),
               NavigationDestination(
                 icon: Icon(Icons.checklist_outlined),
-                selectedIcon: Icon(Icons.checklist, color: AppTheme.primary),
+                selectedIcon: Icon(Icons.checklist),
                 label: '待办',
               ),
               NavigationDestination(
                 icon: Icon(Icons.search_outlined),
-                selectedIcon: Icon(Icons.search, color: AppTheme.primary),
+                selectedIcon: Icon(Icons.search),
                 label: '搜索',
               ),
               NavigationDestination(
                 icon: Icon(Icons.tune_outlined),
-                selectedIcon: Icon(Icons.tune, color: AppTheme.primary),
+                selectedIcon: Icon(Icons.tune),
                 label: '设置',
               ),
             ],

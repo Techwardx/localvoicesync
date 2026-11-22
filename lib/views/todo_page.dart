@@ -89,6 +89,8 @@ class _TodoPageState extends ConsumerState<TodoPage> {
     final asyncTodos = ref.watch(todoListProvider);
     return Scaffold(
       appBar: AppBar(
+        // 与其它页面左上角大标题统一到 24，不再用主题里的 19。
+        titleTextStyle: AppType.pageTitle,
         title: const Text('待办'),
         actions: [
           IconButton(
@@ -237,6 +239,7 @@ class _Composer extends StatelessWidget {
               onSubmitted: (_) => onSubmit(),
               decoration: const InputDecoration(
                 hintText: '添加一条待办…',
+                hintStyle: AppType.inputHint,
                 border: InputBorder.none,
                 enabledBorder: InputBorder.none,
                 focusedBorder: InputBorder.none,

@@ -191,6 +191,7 @@ class _MemoEditPageState extends ConsumerState<MemoEditPage> {
               style: const TextStyle(fontSize: 14.5, height: 1.85),
               decoration: const InputDecoration(
                 hintText: '写下要记的内容…',
+                hintStyle: AppType.inputHint,
                 alignLabelWithHint: true,
               ),
             ),

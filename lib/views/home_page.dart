@@ -457,6 +457,7 @@ class _QuickNoteCard extends StatelessWidget {
               style: const TextStyle(fontSize: 14.5, height: 1.55),
               decoration: const InputDecoration(
                 hintText: '随手写点什么…',
+                hintStyle: AppType.inputHint,
                 filled: false,
                 border: InputBorder.none,
                 enabledBorder: InputBorder.none,

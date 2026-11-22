@@ -56,6 +56,7 @@ class _SearchPageState extends ConsumerState<SearchPage> {
               style: const TextStyle(fontSize: 14.5, height: 1.5),
               decoration: InputDecoration(
                 hintText: '记得录过，但想不起关键词…',
+                hintStyle: AppType.inputHint,
                 prefixIcon: const Icon(Icons.search, size: 19),
                 suffixIcon: search.query.isEmpty
                     ? null

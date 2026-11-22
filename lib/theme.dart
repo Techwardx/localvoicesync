@@ -327,13 +327,15 @@ class AppType {
     fontFamilyFallback: titleFontFallback,
   );
 
-  /// 卡片标题 / 记录标题。
+  /// 卡片标题 / 记录标题：二级标题，同样走内嵌宋体。
   static const TextStyle title = TextStyle(
     fontSize: 15.5,
     height: 1.45,
-    fontWeight: FontWeight.w600,
+    fontWeight: FontWeight.w500,
     letterSpacing: -0.1,
     color: AppTheme.ink,
+    fontFamily: titleFontFamily,
+    fontFamilyFallback: titleFontFallback,
   );
 
   /// 正文。
@@ -341,6 +343,16 @@ class AppType {
     fontSize: 14,
     height: 1.7,
     color: AppTheme.ink,
+  );
+
+  /// 主要输入框的占位文字：与二级标题同一套宋体，但保持小字尺寸与弱色，
+  /// 不参与正文排版。
+  static const TextStyle inputHint = TextStyle(
+    fontSize: 14,
+    height: 1.5,
+    color: AppTheme.faint,
+    fontFamily: titleFontFamily,
+    fontFamilyFallback: titleFontFallback,
   );
 
   /// 摘要 / 次要正文。

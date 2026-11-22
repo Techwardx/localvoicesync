@@ -598,9 +598,11 @@ class _Section extends StatelessWidget {
               title,
               style: const TextStyle(
                 fontSize: 14.5,
-                fontWeight: FontWeight.w600,
+                fontWeight: FontWeight.w500,
                 color: AppTheme.ink,
                 height: 1.4,
+                fontFamily: AppType.titleFontFamily,
+                fontFamilyFallback: AppType.titleFontFallback,
               ),
             ),
             const SizedBox(height: 3),

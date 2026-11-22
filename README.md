@@ -720,7 +720,7 @@ Mac 端配套三件事（`note_meta.py`）：
 | 原样再跑一次 | 跳过（去重仍然有效） |
 | 空旁车 `tags_edited:false` | 标签交回 AI |
 
-### 3.11 界面视觉：宋代青碧（v0.1.11 起，v0.1.12 回调，v0.1.13 微调，v0.1.14 内嵌宋体）
+### 3.11 界面视觉：宋代青碧（v0.1.11 起，v0.1.12 回调，v0.1.13 微调，v0.1.14 内嵌宋体，v0.1.15 二级标题统一）
 
 App 的视觉与交互排版做过一次整体重做，去掉"模板感"，改成克制、
 留白充足的现代工具风格。所有改动**只在 Widget 与主题层**
@@ -741,6 +741,12 @@ Songti / Noto Serif CJK。字体采用 SIL Open Font License 1.1，许可全文�
 `assets/fonts/OFL-SourceHanSerif.txt`。大标题字重同步为 Medium(500)，避免合成
 加粗糊掉宋体笔锋；正文与小字仍未改动。代价是 APK 约增大 24MB。
 
+**v0.1.15 二级标题统一**：把二级标题层也切到内嵌宋体——每条笔记的标题、
+设置页「成员」「连接电脑」等分区标题、搜索/速记/待办/编辑输入框的占位文字，
+都改用同一套字体族；字号与颜色保持原样，只把字重对齐到内嵌的 Medium(500)。
+另外把「待办」页左上角标题从主题默认的 19 提到 24，与记录/搜索/设置一致。
+正文、小字、标签、卡片间距等其它部分未动。
+
 设计令牌集中在 `lib/theme.dart`，颜色常量名向后兼容：
 
 | 令牌 | 取值 | 用途 |
@@ -757,9 +763,10 @@ Songti / Noto Serif CJK。字体采用 SIL Open Font License 1.1，许可全文�
 
 - `AppTheme.panel()`：统一的面板装饰（浅面 + 细边 + 圆角，无阴影），
   是这一版找回来的"骨架"，所有列表项与分区复用它。
-- `AppType`：新增 `reading`（行高 1.9）供长文阅读，另有页面标题 / 标题 /
-  正文 / 摘要 / 分组 / 说明 / 脚注；`AppSpace` 含 `panelGap = 12` 与
-  `pageInset = 24`。中文靠字号、字重、行高与留白建立层级，而非色块。
+- `AppType`：新增 `reading`（行高 1.9）供长文阅读；`pageTitle`、`title`、
+  `inputHint` 走内嵌宋体，正文 / 摘要 / 分组 / 说明 / 脚注仍是系统无衬线。
+  `AppSpace` 含 `panelGap = 12` 与 `pageInset = 24`；中文靠字号、字重、
+  行高与留白建立层级，而非色块。
 - `AppType.titleFontFamily` / `titleFontFallback`：只给 `pageTitle` 与
   `AppBar.titleTextStyle` 用。主字体是内嵌的 `LvsSong`（思源宋体 SC Medium，
   `assets/fonts/SourceHanSerifSC-Medium.otf`）；后面的 Songti SC / STSong /
